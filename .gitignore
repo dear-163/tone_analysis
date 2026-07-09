@@ -1,0 +1,19 @@
+# IDE / Local configs
+.claude/
+.gemini/
+.vscode/
+.idea/
+.DS_Store
+
+# Data files (Avoid uploading huge files to GitHub)
+*.csv
+*.xlsx
+
+# Secrets / Logs
+.env
+*.log
+
+# Nested git repositories / wrangler
+elan-quant/
+.wrangler/
+

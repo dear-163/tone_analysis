@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ToneTurbo Pro</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0d1117;--s1:#161b22;--s2:#21262d;--bd:#30363d;--ac:#7c3aed;--a2:#a78bfa;--pos:#34d399;--neg:#f87171;--lit:#fb923c;--unc:#94a3b8;--neu:#64748b;--tx:#e6edf3;--tx2:#8b949e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;font-size:14px}
+.mono{font-family:'IBM Plex Mono',monospace}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:var(--bd);border-radius:10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.spin{animation:spin .8s linear infinite}
+.fade-in{animation:fadeIn .3s ease-out}
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:12px}
+.btn{border:none;border-radius:8px;padding:9px 14px;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:all .15s;font-family:'Noto Sans TC',sans-serif}
+.btn-primary{background:var(--ac);color:#fff;width:100%}
+.btn-primary:hover{background:#6d28d9;transform:translateY(-1px)}
+.btn-primary:disabled{background:var(--s2);color:var(--tx2);cursor:not-allowed;transform:none}
+.btn-ghost{background:transparent;border:1px solid var(--bd);color:var(--tx2)}
+.btn-ghost:hover{border-color:var(--a2);color:var(--a2)}
+input,textarea,select{background:var(--s2);border:1px solid var(--bd);color:var(--tx);border-radius:8px;padding:9px 13px;font-size:13px;font-family:'Noto Sans TC',sans-serif;width:100%;outline:none;transition:border-color .15s}
+input:focus,textarea:focus,select:focus{border-color:var(--a2)}
+textarea{resize:vertical;min-height:110px}
+input::placeholder,textarea::placeholder{color:var(--tx2)}
+.layout{max-width:1280px;margin:0 auto;padding:24px 20px}
+.grid{display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px}
+/* Header */
+.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
+.logo-box{background:linear-gradient(135deg,#7c3aed,#9d4edd);padding:10px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+.logo-text{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:700}
+.logo-text span{background:linear-gradient(135deg,var(--ac),#9d4edd);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sub{font-size:9px;font-weight:700;color:var(--tx2);letter-spacing:.15em;text-transform:uppercase;margin-top:3px}
+/* Tabs */
+.tab-bar{display:flex;background:var(--s2);border-radius:8px;padding:3px;gap:2px;margin-bottom:14px}
+.tab{flex:1;padding:7px;border:none;background:transparent;color:var(--tx2);border-radius:6px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:all .15s;font-family:'Noto Sans TC',sans-serif}
+.tab.active{background:var(--ac);color:#fff}
+/* Upload zone */
+.upload-zone{border:2px dashed var(--bd);border-radius:12px;padding:28px;text-align:center;cursor:pointer;transition:all .2s}
+.upload-zone:hover{border-color:var(--ac);background:rgba(124,58,237,.05)}
+/* Queue */
+.queue-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.q-item{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:7px 10px;display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700}
+.q-item.active{border-color:var(--ac);background:rgba(124,58,237,.1)}
+.q-item.done{border-color:var(--pos)}
+.q-item.error{border-color:var(--neg)}
+/* Progress */
+.prog{height:2px;background:var(--s2);border-radius:1px;overflow:hidden;margin-top:10px}
+.prog-fill{height:100%;background:var(--ac);transition:width .3s}
+/* Table */
+table{width:100%;border-collapse:collapse}
+th{background:var(--s2);padding:9px 12px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--tx2);text-align:left;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5}
+td{padding:9px 12px;font-size:12px;border-bottom:1px solid rgba(48,54,61,.5);vertical-align:middle}
+tr:hover td{background:rgba(255,255,255,.02)}
+/* Tone bar */
+.tbar{width:70px;height:5px;background:var(--s2);border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle;margin-left:5px}
+.tbar-fill{height:100%;border-radius:3px}
+/* Badges */
+.badge{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:4px}
+.b-pos{background:rgba(52,211,153,.15);color:var(--pos)}
+.b-neg{background:rgba(248,113,113,.15);color:var(--neg)}
+.b-lit{background:rgba(251,146,60,.15);color:var(--lit)}
+.b-unc{background:rgba(148,163,184,.15);color:var(--unc)}
+.b-neu{background:rgba(100,116,139,.15);color:var(--neu)}
+.b-none{background:var(--s2);color:var(--tx2)}
+.b-ai-on{background:rgba(52,211,153,.15);color:var(--pos);display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px}
+.b-ai-off{background:rgba(251,146,60,.15);color:var(--lit);display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px}
+.b-ai-err{background:rgba(248,113,113,.15);color:var(--neg);display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px}
+/* Stat grid */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat{background:var(--s2);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.stat-n{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:700;margin-bottom:4px}
+.stat-l{font-size:9px;color:var(--tx2);text-transform:uppercase;letter-spacing:.08em}
+/* API key bar */
+.api-bar{background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+.api-bar.on{border-color:rgba(52,211,153,.5)}
+.api-bar.off{border-color:rgba(251,146,60,.4)}
+/* Detail modal */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+.modal{background:var(--s1);border:1px solid var(--bd);border-radius:16px;width:100%;max-width:900px;max-height:85vh;display:flex;flex-direction:column;animation:fadeIn .2s ease-out}
+.modal-hdr{padding:18px 22px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center}
+.modal-body{overflow-y:auto;padding:14px 22px;flex:1}
+.filter-bar{padding:10px 22px;border-bottom:1px solid var(--bd);display:flex;gap:5px;flex-wrap:wrap}
+.filt-btn{padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;border:1px solid var(--bd);background:transparent;color:var(--tx2);font-family:'Noto Sans TC',sans-serif;transition:all .15s}
+.filt-btn.active{background:var(--ac);color:#fff;border-color:var(--ac)}
+/* Sentence card */
+.s-card{margin-bottom:8px;padding:11px;background:var(--s2);border-radius:8px;border:1px solid var(--bd)}
+.s-card.neutral{background:rgba(100,116,139,.05);border-color:rgba(100,116,139,.3)}
+.s-meta{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.s-text{font-size:13px;line-height:1.6;margin-bottom:6px}
+.s-text.dim{color:var(--tx2)}
+.chips{display:flex;flex-wrap:wrap;gap:2px;padding-top:8px;border-top:1px solid var(--bd)}
+.chip{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;display:inline-block}
+.cp-pos{background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.3);color:var(--pos)}
+.cp-neg{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.3);color:var(--neg)}
+.cp-lit{background:rgba(251,146,60,.12);border:1px solid rgba(251,146,60,.3);color:var(--lit)}
+.cp-unc{background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.3);color:var(--unc)}
+/* Exclusion panel */
+.excl-panel{background:var(--s1);border:1px solid var(--bd);border-radius:12px;overflow:hidden}
+.excl-hdr{width:100%;padding:11px 14px;background:transparent;border:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.excl-body{padding:0 14px 14px;border-top:1px solid var(--bd)}
+.excl-tag{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:3px 8px;border-radius:5px;background:rgba(100,116,139,.15);border:1px solid rgba(100,116,139,.3);color:var(--neu);margin:3px}
+.excl-tag button{background:none;border:none;cursor:pointer;color:var(--neu);font-size:11px;opacity:.6;padding:0}
+.excl-tag button:hover{opacity:1;color:var(--neg)}
+.cat-lbl{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;border-radius:4px;margin-right:5px}
+.cat-greeting{background:rgba(52,211,153,.1);color:#6ee7b7}
+.cat-serial{background:rgba(251,146,60,.1);color:#fdba74}
+.cat-time{background:rgba(148,163,184,.1);color:#94a3b8}
+.cat-presentation{background:rgba(99,102,241,.1);color:#a5b4fc}
+.cat-closing{background:rgba(248,113,113,.1);color:#fca5a5}
+.cat-qa_host{background:rgba(251,191,36,.1);color:#fcd34d}
+.cat-transition{background:rgba(34,211,238,.1);color:#67e8f9}
+.cat-custom{background:rgba(167,139,250,.1);color:var(--a2)}
+/* Processing badge */
+.proc-badge{display:flex;align-items:center;gap:8px;background:var(--s1);border:1px solid var(--ac);border-radius:10px;padding:7px 14px}
+/* scroll */
+.scroll-box{overflow-y:auto;overflow-x:auto}
+/* empty state */
+.empty{padding:50px;text-align:center;color:var(--tx2);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+/* detail view btn */
+.view-btn{font-size:10px;font-weight:700;color:var(--a2);background:transparent;border:1px solid rgba(124,58,237,.4);border-radius:6px;padding:3px 8px;cursor:pointer;white-space:nowrap;font-family:'Noto Sans TC',sans-serif;transition:all .15s}
+.view-btn:hover{background:rgba(124,58,237,.2)}
+footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(--bd);font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);letter-spacing:.15em;text-transform:uppercase}
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- Header -->
+  <div class="hdr">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div class="logo-box">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <div>
+        <div class="logo-text">ToneTurbo <span>Pro</span></div>
+        <div class="sub">管理階層語調分析系統</div>
+      </div>
+    </div>
+    <div id="proc-badge" style="display:none" class="proc-badge">
+      <div style="width:14px;height:14px;border:2px solid var(--s2);border-top-color:var(--a2);border-radius:50%" class="spin"></div>
+      <span class="mono" style="font-size:10px;color:var(--a2);font-weight:700;letter-spacing:.08em" id="proc-text">PROCESSING</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Left Panel -->
+    <div class="col">
+      <!-- API Key -->
+      <div class="api-bar off" id="api-bar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--lit)" stroke-width="2.5" id="api-icon"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;color:var(--lit)" id="api-label">Gemini AI 二次分析 ○ 未設定</div>
+          <div style="display:flex;gap:6px">
+            <input type="password" id="api-key" placeholder="貼上 Gemini API Key..." style="flex:1;padding:5px 8px;font-size:11px;min-width:0">
+            <button class="btn btn-ghost" onclick="toggleApiKey()" style="width:auto;padding:4px 8px;font-size:10px" id="api-toggle">顯示</button>
+          </div>
+        </div>
+        <span id="ai-status"></span>
+      </div>
+
+      <!-- Exclusion Panel -->
+      <div class="excl-panel" id="excl-panel">
+        <button class="excl-hdr" onclick="toggleExcl()">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span>🚫</span>
+            <span style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--neu)">中性排除清單</span>
+            <span id="excl-count" style="font-size:10px;background:rgba(100,116,139,.2);color:var(--neu);border-radius:10px;padding:1px 8px;font-weight:700"></span>
+          </div>
+          <span id="excl-arrow" style="color:var(--tx2);font-size:12px;transition:transform .2s">▼</span>
+        </button>
+        <div id="excl-body" style="display:none" class="excl-body">
+          <div id="excl-cats"></div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--bd)">
+            <div style="font-size:9px;font-weight:700;color:var(--tx2);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">新增自訂排除詞</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <input id="new-word" placeholder="輸入詞語或開頭..." style="flex:1;min-width:90px;padding:6px 10px;font-size:12px" onkeydown="if(event.key==='Enter')addExclusion()">
+              <select id="new-type" style="padding:6px 8px;font-size:11px;width:auto">
+                <option value="prefix">開頭符合</option>
+                <option value="contains">包含詞語</option>
+                <option value="exact">完整符合</option>
+                <option value="regex">正規表示式</option>
+              </select>
+              <button class="btn btn-ghost" onclick="addExclusion()" style="width:auto;padding:6px 10px;font-size:11px">＋ 新增</button>
+              <button class="btn btn-ghost" onclick="resetExclusions()" style="width:auto;padding:6px 8px;font-size:10px">重置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Upload Card -->
+      <div class="card" style="padding:18px">
+        <div class="tab-bar">
+          <button class="tab active" id="tab-batch" onclick="switchTab('batch')">批次上傳</button>
+          <button class="tab" id="tab-manual" onclick="switchTab('manual')">手動貼上</button>
+        </div>
+        <div id="pane-batch">
+          <label class="upload-zone" style="display:block;cursor:pointer">
+            <input type="file" multiple accept=".txt" onchange="handleFiles(this)" style="display:none">
+            <svg style="margin:0 auto 10px;color:var(--tx2);display:block" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+            <div style="font-size:11px;color:var(--tx2);font-weight:700;letter-spacing:.08em;text-transform:uppercase">點擊上傳 .txt 檔案</div>
+          </label>
+          <button class="btn btn-ghost" onclick="addTestSample()" style="width:100%;margin-top:10px">＋ 加入測試樣本</button>
+          <div style="margin-top:10px;padding:8px 12px;background:var(--s2);border-radius:8px;border:1px solid var(--bd)">
+            <p style="font-size:10px;color:var(--tx2);margin:0;line-height:1.6">💡 <strong style="color:var(--a2)">手動標記 Q&A 起點</strong>：在逐字稿中插入一行 <code style="background:var(--bg);padding:1px 5px;border-radius:3px;color:var(--a2)">#QA_START</code>，分析時將從該行起切換為問答段</p>
+          </div>
+        </div>
+        <div id="pane-manual" style="display:none">
+          <input id="m-name" placeholder="樣本 ID（如：2330）" style="margin-bottom:8px">
+          <textarea id="m-text" placeholder="在此貼上逐字稿全文..."></textarea>
+          <button class="btn btn-ghost" onclick="addManual()" style="width:100%;margin-top:8px">加入分析佇列</button>
+        </div>
+        <div id="prog-wrap" style="display:none">
+          <div class="prog"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
+          <div class="mono" style="font-size:9px;color:var(--tx2);text-align:right;margin-top:5px" id="prog-text">0/0</div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" id="run-btn" onclick="runBatch()" disabled>▶ 啟動批次分析</button>
+      </div>
+
+      <!-- Export Card -->
+      <div class="card fade-in" id="export-card" style="display:none;padding:18px;border-color:rgba(124,58,237,.3)">
+        <div style="font-size:9px;font-weight:700;color:var(--a2);letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">匯出報表</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-ghost" onclick="exportSummary()" style="text-align:left;padding:9px 13px">📊 摘要報表（每公司一行）</button>
+          <button class="btn btn-ghost" onclick="exportDetail()" style="text-align:left;padding:9px 13px">📋 完整明細（含逐句分析）</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="card fade-in" id="stats-card" style="display:none;padding:18px">
+        <div style="font-size:9px;font-weight:700;color:var(--tx2);letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">整體統計</div>
+        <div class="stat-grid" id="stat-grid"></div>
+      </div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="col">
+      <!-- Queue -->
+      <div class="card" style="overflow:hidden">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
+          <span class="mono" style="font-size:9px;font-weight:700;color:var(--tx2);letter-spacing:.12em;text-transform:uppercase">BATCH QUEUE (<span id="q-count">0</span>)</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" onclick="clearQueue()">清除佇列</button>
+            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" onclick="clearAll()">全部清除</button>
+          </div>
+        </div>
+        <div class="scroll-box" style="max-height:150px;padding:10px 14px">
+          <div id="queue-empty" class="empty" style="padding:20px">尚未加入任何樣本</div>
+          <div id="queue-grid" class="queue-grid"></div>
+        </div>
+      </div>
+
+      <!-- Results Table -->
+      <div class="card" style="overflow:hidden">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
+          <span class="mono" style="font-size:9px;font-weight:700;color:var(--a2);letter-spacing:.12em;text-transform:uppercase">EMPIRICAL RESULTS</span>
+          <span class="mono" style="font-size:9px;color:var(--tx2)">COMPLETED: <span id="result-count">0</span></span>
+        </div>
+        <div class="scroll-box" style="max-height:500px">
+          <div id="results-empty" class="empty">等待分析輸出...</div>
+          <table id="results-table" style="display:none">
+            <thead>
+              <tr>
+                <th>ID / Company</th>
+                <th style="color:#818cf8">Tone_P</th>
+                <th style="color:var(--pos)">Tone_Q</th>
+                <th style="color:#fff">Tone_T</th>
+                <th style="color:var(--pos)">正向</th>
+                <th style="color:var(--neg)">負向</th>
+                <th style="color:var(--lit)">爭議</th>
+                <th style="color:var(--unc)">不確定</th>
+                <th style="color:var(--neu)">排除</th>
+                <th style="color:var(--tx2)">有效句</th>
+                <th style="color:var(--a2)">AI</th>
+                <th style="color:var(--a2)">明細</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>ToneTurbo Pro · Standalone Edition · </footer>
+</div>
+
+<!-- Detail Modal -->
+<div class="overlay" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div>
+        <div style="font-size:11px;color:var(--tx2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">句子明細</div>
+        <div style="font-size:18px;font-weight:900" id="modal-title"></div>
+      </div>
+      <button class="btn btn-ghost" onclick="closeModal()" style="width:auto">✕ 關閉</button>
+    </div>
+    <div class="filter-bar" id="modal-filters"></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+// ── 字典 ──────────────────────────────────────────────────────────
+const DICTS = {
+  POS:"上揚,上漲,主動,了結,享受,享有,使,保證,值得,偉大,價格上漲,儘管,償還,優勢,優於,充分,光榮,兌付,免費,利益,創意,創新,創造力,創造性,加強,努力,勤奮,區別,卓越,印象,友好,反彈,取得,取悅,受惠,受益,可取,可靠,可靠性,合作,吸引力,啟用,喜悅,喜歡,圓滿,地位,報酬,墊付,增強,壯觀,多才多藝,夢夢想,大大,好,好轉,安定,完全,完善,完成,完整性,完美,容易,實現,實益,寶貴,尊重,履行,巧奪天工,巨大,平滑,幸福,建設性,強,強度,影響,得天獨厚,從優,忠誠,快樂,恢復,恭維,愉快,慈善,成功,成就,成績,打動,承兌,授權,排他性,接受,推動,推進,提高,擅長,支援,收益,收藏,改進,放心,放款,效率,普及,更好,最大,最好,最終,最高,有利,有利可圖,有利於,有效,有效性,有益,棒,榮幸,榮譽,樂觀,模範,機會,歷次,活力,流行,深刻,清償,清新,滿意,滿足,無與倫比,熟練,熱情,特殊,特殊性,獎勵,獎金,獨家,獨特,獲利,獲得,理想,異常,發明,發明家,盈利,確保,確鑿,禮貌,稱讚,積極,穩健性,穩定,突破,立功,第一,精美,精通,素養,繁榮,美食,美麗,聯盟,聰明才智,聲望,能力,能夠,自信,致意,興奮,著名,蓬勃發展,解決,註定,誠信,讚譽,豐富,資訊,賦予,贏利,贏家,贏得,贖回,赫然,超越,超過,輝煌,透明度,進展,進步,達到,銘記,難以置信,需,靈感,青睞,革命,革命性,革新,順利,領先,領導,首映,驚喜,高級,高興,鼓勵,鼓舞人心".split(","),
+  NEG:"一文不值,下放,下降,不一致,不佳,不便,不公,不切實際,不利,不力,不及,不可,不可逆轉,不可避免,不合情理,不合時宜,不善,不夠,不妥,不安,不宜,不幸,不得人心,不惜,不慎,不成比例,不敷,不景氣,不法,不滿,不當,不確定性,不符,不能,不良,不足,不道德,不適,不願,中傷,中斷,中止,串謀,串通,乾旱,事故,令人不安,企業,低,低估,低迷,佔領,作廢,侵吞,侵權,侵犯,侵蝕,俯瞰,倒塌,倒閉,假冒,偏差,偏見,偏離,做假,停工,停機,停止,停滯,停滯不前,停牌,停用,停電,停頓,偷,偽證,偽造,傳喚,傷害,僵局,充公,入侵,公害,公訴,共謀,冒牌貨,冒犯,冤枉,凍結,分心,分拆,分散,分歧,切斷,刑事,刑事責任,刑罰,判刑,判決,判處,利用,制裁,削弱,削減,剔除,剝削,剝奪,剝離,創傷,加劇,加重,動盪,勾結,危及,危害,危機,危險,原告,反壟斷,反對,反常,反托拉斯,反抗,反訴,取代,取消,受傷,受害者,受損,叛亂,召喚,召回,可恥,可疑,否定,否決,否認,唐突,問題,喪失,嘲笑,嚴厲,嚴格,嚴重,嚴重性,囚禁,回佣,回扣,回溯,回跌,回避,困惑,困擾,困難,堅持,報復,報應,壓力,壞,壟斷,失去,失寵,失控,失效,失敗,失望,失業,失真,失算,失職,失衡,失誤,失調,失責,失蹤,失靈,妨礙,威懾,威脅,嫌疑人,密謀,審查,封存,對手,對抗,對策,對簿公堂,尷尬,崩潰,差,差異,差距,差錯,差額,干擾,平倉,廉價,廢棄,廢止,廢除,延期,延誤,延遲,延長,弄錯,引起,弱,弱勢,弱點,強制,強迫,彌補,後果,徵用,徹底,忽略,忽視,急劇,性騷擾,恐嚇,恐慌,恐懼,恥辱,悲劇,悲慘,惡化,惡意,惹惱,意外,慘澹,懲罰,懷疑,撤回,撤資,撤銷,擅自,操縱,擔心,擾亂,攤薄,收縮,收緊,改組,攻擊,放棄,放緩,故障,敗訴,教唆,敲詐,敵對,敵意,昂貴,暫停,暴力,暴跌,暴露,曠工,歪曲,死亡,死刑,毀滅性,毫無,氣餒,污染,污點,沒收,沮喪,波動,洗錢,洩露,浪費,消失,消極,消耗,淫穢,混淆,清倉,清盤,清算,減價,減少,減損,減產,減記,溢出,滅,滅亡,滋擾,滯後,滯納金,滯銷,漏報,漏洞,激烈,濫用,瀆職,瀕危,災難,無利可圖,無序,無效,無法,無理,無知,無能,無視,煩人,煩惱,爭奪,爭端,爭論,爭議,犧牲,犯下,犯罪,猛烈,猥褻,猶豫不決,瓶頸,生病,申訴,異議,疏忽,疏遠,病死,痛苦,盜用,監禁,矛盾,短缺,破壞,破損,破產,破碎,禁令,禁制令,禁止,禁止令,禁用,禁運,穩定,突然,竄改,索賠,終止,結束,緊張,緊急,罰款,罷工".split(","),
+  LIT:"上訴,上訴人,上述,下文,不倦,不可逆轉,中斷,中間,主要,乃是,之前,事宜,事實上,交割,今後,代,代位,令狀,以下,以後,仲介,仲裁,仲裁人,任何,休會,但書,何人,作證,侵吞,侵吞公款,侵權,促進,保人,保證,保釋,保障,信念,信用證,修改,修正,修訂,候審,偏見,停止,偽證,傳喚,傳票,債務人,債權,債權人,儘管,優勢,先行,光復,免除,入場,公投,公訴,公證,再審,凡,分割,分配,切除,刑事,刑事責任,判例,判刑,判定,判決,判處,剝奪,加入,動產,勒告,勾結,即,原告,反壟斷,反悔,反托拉斯,反訴,反駁,取代,取消,受理,受讓人,受贈人,召喚,可執行,司法,合併,合同,合法,合法化,合法性,合約,吊銷,同意,同等,否決,呈請,呼籲,和解,商議,善意,喪失,囚禁,回避,在場,在此,地區,執政,執行,壟斷,失效,失職,委託,委託人,定罪,寄託,實施,實習,實行,審判,審理,審結,審訊,寬容,尊重,對,對簿公堂,導致,就此,干預,廢棄,廢止,廢除,強迫,律師,從此,徵用,憲法,懇求,應,扣押,承包,投訴,抗辯,抵押,拘留所,招標,指控,挪用,授,推翻,損害,撤回,撤銷,擁有者,據稱,收縮,收購人,故意,文書,於是,更正,有效,案件,條件,條例,構,檢察,檢察官,欠款,此外,此後,此處,歸還,死者,決定性,沒收,法令,法則,法官,法定,法庭,法律,法治,法規,法警,法院,清償,清算,減損,滯納金,濫用職權,無形,無效,無罪,無論,爭論,爭執,爭端,特此,犯下,犯罪,由此,申請,申請人,異議,當事人,發行者,盜用公款,監守自盜,監督,監禁,監管,矯正,確認,票,禁令,禁制令,禁止,禁止令,租船,立即,立法,立法機關,章程,第,管理,管轄,管轄權,索償,索賠,終止,結算,締約國,緩刑,罪,罪犯,罪行,罷免,聲明,聲稱,背書,自律,舉報人,處以,虧空,被告,被告人,裁判,裁定,裁決,補償,補救,複審,要約,見證,規例,規則,規定,規章,規管,解決,解約,解釋,解除,觸犯,訂立,訊問,記載,訴狀,訴訟,評判,詢問,試用,誓言,誰,誹謗,調停,調整,調節,調解,請求,請願,諮詢,證人,證據,證明,證書,證詞,議員,議定書,買主,賠償,賠款,質問,質押,起草,起訴,起訴書,超出,超越,輕罪,轉讓,辯解,迄今,追償,退出,逃犯,連帶,違反,違反規定,遣散,適當,遺囑,遺贈,重審,長輩,開脫,阻礙,附件,附屬,降級,陪審,陪審員,非法,預審,頒佈,高利貸,默契".split(","),
+  UNC:"不合時宜,不同,不安,不成文,不明,不甘,不確定性,中止,也許,交代,邀請,似乎,依賴,修改,修正,修訂,假定,假設,偏差,偏離,偶然,偶爾,冒著,出現,初步,動盪,十字路口,危險,反常,反思,取決於,可以,可想而知,可能,可能性,嘗試,大概,大約,待定,建議,幾乎,思考,想像,意外,意想不到,應急,懷疑,投機,投機性,投資,接近,推定,推測,提前,揮發,撫育,擔保,擱置,改變,敏感性,明顯,暴露,有些,有時,期待,期望,未,未定,未知,未經,根據,條件,機率,模棱兩可,模糊,殘缺不全,波動,波動性,混亂,混淆,漲跌,澄清,無形,無限期,猜測,畏懼,異常,相信,相關性,穩定性,突然,罕,考慮,蠻橫,表明,複審,複查,觀測,解讀,解釋,計算,評估,詮釋,認為,謠言,謹慎,證實,變,變動,變化,變幻莫測,變數,費率,近,近似,通常,逼近,配額,重估價,重新,量化,錯誤,防範,陌生,隨機,隱約,隱藏,難以預料,零星,非法,預估,預期,預測,預計,預防,預防措施,顯然,風險".split(",")
+};
+
+// ── 排除清單 ──────────────────────────────────────────────────────
+const DEFAULT_EXCLUSIONS = [
+  {id:'g01',category:'greeting',label:'大家好',type:'contains',value:'大家好'},
+  {id:'g36',category:'greeting',label:'大家午安',type:'contains',value:'大家午安'},
+  {id:'g37',category:'greeting',label:'大家下午好',type:'contains',value:'大家下午好'},
+  {id:'g38',category:'greeting',label:'簡單為大家介紹',type:'contains',value:'簡單為大家介紹'},
+  {id:'g39',category:'greeting',label:'我是…總經理',type:'regex',value:'我是.*(總經理|財務長|董事長|協理|執行長|副總|投顧|研究員|分析師)'},
+  {id:'g02',category:'greeting',label:'各位好',type:'prefix',value:'各位好'},
+  {id:'g03',category:'greeting',label:'早安',type:'prefix',value:'早安'},
+  {id:'g04',category:'greeting',label:'午安',type:'prefix',value:'午安'},
+  {id:'g05',category:'greeting',label:'晚安',type:'prefix',value:'晚安'},
+  {id:'g06',category:'greeting',label:'謝謝各位',type:'prefix',value:'謝謝各位'},
+  {id:'g07',category:'greeting',label:'謝謝大家',type:'contains',value:'謝謝大家'},
+  {id:'g08',category:'greeting',label:'感謝各位',type:'prefix',value:'感謝各位'},
+  {id:'g09',category:'greeting',label:'感謝大家',type:'prefix',value:'感謝大家'},
+  {id:'g10',category:'greeting',label:'歡迎參加',type:'prefix',value:'歡迎參加'},
+  {id:'g11',category:'greeting',label:'歡迎各位',type:'prefix',value:'歡迎各位'},
+  {id:'g12',category:'greeting',label:'您好',type:'prefix',value:'您好'},
+  {id:'g13',category:'greeting',label:'哈囉',type:'prefix',value:'哈囉'},
+  {id:'g14',category:'greeting',label:'各位先進，大家',type:'prefix',value:'各位先進，大家'},
+  {id:'g15',category:'greeting',label:'各位投資先進',type:'prefix',value:'各位投資先進'},
+  {id:'g16',category:'greeting',label:'主席、各位',type:'prefix',value:'主席、各位'},
+  {id:'g17',category:'greeting',label:'非常謝謝大家參加',type:'prefix',value:'非常謝謝大家參加'},
+  {id:'g18',category:'greeting',label:'以上謝謝',type:'prefix',value:'以上謝謝'},
+  {id:'g19',category:'greeting',label:'謝謝各位的聆聽',type:'contains',value:'謝謝各位的聆聽'},
+  {id:'g20',category:'greeting',label:'蒞臨',type:'contains',value:'蒞臨'},
+  {id:'g21',category:'greeting',label:'多多指教',type:'contains',value:'多多指教'},
+  {id:'g22',category:'greeting',label:'敬祝',type:'prefix',value:'敬祝'},
+  {id:'g23',category:'greeting',label:'身體健康',type:'contains',value:'身體健康'},
+  {id:'g24',category:'greeting',label:'投資順利',type:'contains',value:'投資順利'},
+  {id:'g25',category:'greeting',label:'熱情參與',type:'contains',value:'熱情參與'},
+  {id:'g26',category:'greeting',label:'非常感謝',type:'prefix',value:'非常感謝'},
+  {id:'g27',category:'greeting',label:'各位嘉賓',type:'prefix',value:'各位嘉賓'},
+  {id:'g28',category:'greeting',label:'各位貴賓',type:'prefix',value:'各位貴賓'},
+  {id:'g29',category:'greeting',label:'也謝謝',type:'prefix',value:'也謝謝'},
+  {id:'g30',category:'greeting',label:'光臨',type:'contains',value:'光臨'},
+  {id:'s01',category:'serial',label:'第一點',type:'prefix',value:'第一點'},
+  {id:'s02',category:'serial',label:'第二點',type:'prefix',value:'第二點'},
+  {id:'s03',category:'serial',label:'第三點',type:'prefix',value:'第三點'},
+  {id:'s04',category:'serial',label:'（一）',type:'prefix',value:'（一）'},
+  {id:'s05',category:'serial',label:'（二）',type:'prefix',value:'（二）'},
+  {id:'s06',category:'serial',label:'（三）',type:'prefix',value:'（三）'},
+  {id:'s07',category:'serial',label:'數字序號',type:'regex',value:'^\\d+[.、。]'},
+  {id:'s08',category:'serial',label:'字母序號',type:'regex',value:'^[a-zA-Z][.、)）]'},
+  {id:'s09',category:'serial',label:'首先，',type:'prefix',value:'首先，'},
+  {id:'s10',category:'serial',label:'其次，',type:'prefix',value:'其次，'},
+  {id:'s11',category:'serial',label:'再者，',type:'prefix',value:'再者，'},
+  {id:'t01',category:'time',label:'今天',type:'exact',value:'今天'},
+  {id:'t02',category:'time',label:'本季',type:'exact',value:'本季'},
+  {id:'t03',category:'time',label:'本年度',type:'exact',value:'本年度'},
+  {id:'t04',category:'time',label:'Q1',type:'exact',value:'Q1'},
+  {id:'t05',category:'time',label:'Q2',type:'exact',value:'Q2'},
+  {id:'t06',category:'time',label:'Q3',type:'exact',value:'Q3'},
+  {id:'t07',category:'time',label:'Q4',type:'exact',value:'Q4'},
+  {id:'p01',category:'presentation',label:'如畫面所示',type:'prefix',value:'如畫面所示'},
+  {id:'p02',category:'presentation',label:'接下來，請',type:'prefix',value:'接下來，請'},
+  {id:'p03',category:'presentation',label:'接下來請',type:'prefix',value:'接下來請'},
+  {id:'p04',category:'presentation',label:'聲明',type:'contains',value:'聲明'},
+  {id:'p05',category:'presentation',label:'法人說明會',type:'contains',value:'法人說明會'},
+  {id:'p06',category:'presentation',label:'法說會',type:'contains',value:'法說會'},
+  {id:'p07',category:'presentation',label:'麥克風',type:'contains',value:'麥克風'},
+  {id:'p08',category:'presentation',label:'聊天室',type:'contains',value:'聊天室'},
+  {id:'p09',category:'presentation',label:'會後',type:'contains',value:'會後'},
+  {id:'p10',category:'presentation',label:'自行閱覽',type:'contains',value:'自行閱覽'},
+  {id:'p11',category:'presentation',label:'簡報大綱',type:'contains',value:'簡報大綱'},
+  {id:'p12',category:'presentation',label:'舉手功能',type:'contains',value:'舉手功能'},
+  {id:'p13',category:'presentation',label:'文字提問',type:'contains',value:'文字提問'},
+  {id:'p14',category:'presentation',label:'把時間交給',type:'contains',value:'把時間交給'},
+  {id:'p15',category:'presentation',label:'做簡報',type:'contains',value:'做簡報'},
+  {id:'p16',category:'presentation',label:'由我來進行簡報',type:'contains',value:'由我來進行簡報'},
+  {id:'p17',category:'presentation',label:'邀請…說明',type:'regex',value:'邀請.*(報告|簡報|說明)'},
+  {id:'e01',category:'closing',label:'到此結束',type:'contains',value:'到此結束'},
+  {id:'e02',category:'closing',label:'法說會結束',type:'regex',value:'法說會.*結束'},
+  {id:'e03',category:'closing',label:'說明會結束',type:'regex',value:'說明會.*結束'},
+  {id:'e04',category:'closing',label:'簡報就結束',type:'contains',value:'簡報就結束'},
+  {id:'e05',category:'closing',label:'告一段落',type:'contains',value:'告一段落'},
+  {id:'e06',category:'closing',label:'會議時間差不多',type:'contains',value:'會議時間也差不多'},
+  {id:'q01',category:'qa_host',label:'QA時間',type:'regex',value:'(QA|Q&A|問答|意見交換).*時間'},
+  {id:'q02',category:'qa_host',label:'是否有問題發問',type:'regex',value:'是否.*問題.*發問'},
+  {id:'q03',category:'qa_host',label:'進入意見交換',type:'contains',value:'進入意見交換'},
+  {id:'q04',category:'qa_host',label:'利用…提問',type:'regex',value:'利用.*(提問|留言|聊天室)'},
+  {id:'q05',category:'qa_host',label:'第X個問題',type:'regex',value:'第[一二三四五六七八九十\\d]+個問題'},
+  {id:'q06',category:'qa_host',label:'謝謝您的提問',type:'contains',value:'謝謝您的提問'},
+  {id:'q07',category:'qa_host',label:'有X個問題',type:'regex',value:'有[一二三四五六七八九兩幾\\d]+個問題'},
+  {id:'q08',category:'qa_host',label:'好，謝謝',type:'exact',value:'好，謝謝'},
+  {id:'q09',category:'qa_host',label:'好的，謝謝',type:'exact',value:'好的，謝謝'},
+  {id:'q10',category:'qa_host',label:'是否還有其他提問',type:'contains',value:'是否還有其他提問'},
+  {id:'q11',category:'qa_host',label:'下一個問題是',type:'prefix',value:'下一個問題是'},
+  {id:'q12',category:'qa_host',label:'沒有其他問題',type:'contains',value:'沒有其他問題'},
+  {id:'q13',category:'qa_host',label:'開放最後一個問題',type:'contains',value:'開放最後一個問題'},
+  {id:'q14',category:'qa_host',label:'想提出問題的嗎',type:'contains',value:'提出問題的嗎'},
+  {id:'q15',category:'qa_host',label:'接著是…問題',type:'regex',value:'^接著是.*問題$'},
+  {id:'q16',category:'qa_host',label:'最後一個問題是',type:'prefix',value:'最後一個問題是'},
+  {id:'q17',category:'qa_host',label:'是否還有其他問題呢',type:'contains',value:'是否還有其他問題'},
+  {id:'q18',category:'qa_host',label:'現在我們開放提問',type:'prefix',value:'現在我們開放提問'},
+  {id:'f01',category:'transition',label:'接下來報告',type:'prefix',value:'接下來報告'},
+  {id:'f02',category:'transition',label:'稍微說明',type:'prefix',value:'稍微說明'},
+  {id:'f03',category:'transition',label:'旁邊的簡報',type:'prefix',value:'旁邊的簡報'},
+  {id:'f04',category:'transition',label:'各位可以看到…部分',type:'regex',value:'各位可以看到.*部分'},
+  {id:'f05',category:'transition',label:'藉此機會',type:'contains',value:'藉此機會'},
+  {id:'f06',category:'transition',label:'感謝大家的關注',type:'contains',value:'感謝大家的關注'},
+  {id:'f07',category:'transition',label:'持續支持',type:'contains',value:'持續支持我們'},
+  {id:'f08',category:'transition',label:'謝謝我們的',type:'prefix',value:'謝謝我們的'},
+  {id:'f09',category:'transition',label:'時間戳記',type:'regex',value:'^\\(\\d{2}:\\d{2}:\\d{2}\\)'},
+  {id:'f10',category:'transition',label:'非常感謝…分享與說明',type:'regex',value:'非常感謝.*(分享|說明|簡報)'},
+];
+
+const CAT_META = {
+  greeting:{label:'問候語',cls:'cat-greeting',emoji:'👋'},
+  serial:{label:'序號條列',cls:'cat-serial',emoji:'🔢'},
+  time:{label:'時間日期',cls:'cat-time',emoji:'📅'},
+  presentation:{label:'簡報導言',cls:'cat-presentation',emoji:'📋'},
+  closing:{label:'結束語',cls:'cat-closing',emoji:'🔚'},
+  qa_host:{label:'Q&A 主持',cls:'cat-qa_host',emoji:'🎤'},
+  transition:{label:'轉場銜接',cls:'cat-transition',emoji:'↪️'},
+  custom:{label:'自訂',cls:'cat-custom',emoji:'✏️'},
+};
+
+// ── 狀態 ──────────────────────────────────────────────────────────
+let queue = [], results = [], exclusions = [...DEFAULT_EXCLUSIONS], processing = false, currentIdx = -1, detailResult = null, modalFilter = 'ALL';
+
+// ── 排除判斷 ──────────────────────────────────────────────────────
+function isNeutral(sent) {
+  for (const ex of exclusions) {
+    try {
+      if (ex.type==='exact' && sent===ex.value) return true;
+      if (ex.type==='prefix' && sent.startsWith(ex.value)) return true;
+      if (ex.type==='contains' && sent.includes(ex.value)) return true;
+      if (ex.type==='regex' && new RegExp(ex.value).test(sent)) return true;
+    } catch(e){}
+  }
+  return false;
+}
+
+function matches(sent, dict) {
+  return [...new Set(dict.filter(w => w && sent.includes(w)))];
+}
+
+// 一次算出四個字典的命中詞清單，count 用 .length 推導，避免同一句話對同一份字典重複掃描兩次
+function dictMatches(sent) {
+  return {
+    POS: matches(sent, DICTS.POS),
+    NEG: matches(sent, DICTS.NEG),
+    LIT: matches(sent, DICTS.LIT),
+    UNC: matches(sent, DICTS.UNC),
+  };
+}
+
+// 回傳陣列：正常只有一個類別，打平時多個類別並列（例如 ['POS','NEG']）
+function localCat(sent, m) {
+  if (isNeutral(sent)) return ['NEUTRAL'];
+  const counts = {POS:m.POS.length, NEG:m.NEG.length, LIT:m.LIT.length, UNC:m.UNC.length};
+  const max = Math.max(counts.POS, counts.NEG, counts.LIT, counts.UNC);
+  if (max === 0) return ['NONE'];
+  return Object.keys(counts).filter(k => counts[k] === max);
+}
+
+// 管理層職稱關鍵字（純職稱，不含姓名）
+const MGMT_TITLES = /總經理|執行長|CEO|CFO|COO|CTO|副總|董事長|董事|首席|主管|協理|經理|財務長|發言人|副發言人|管理層|會計主管|業務|資深/;
+// 非管理層關鍵字：用於從 **姓名-職稱** 或 **職稱** 標籤中抽出的「職稱字串」比對，字串本身短且精確，可以用較寬鬆的清單
+const NON_MGMT_TITLES = /Investor\s*Relation|IR|主持人|司儀|媒體|分析師|投資人|記者|聽眾|研究員|主持|座談|法說|證券|投顧/;
+// 整句關鍵字比對時（沒有標籤格式），只信任「明確的發言人標籤前綴」（如句首「主持人：」），
+// 避免「法說」「媒體」「投資人」「證券」這類管理層自己講話時也常提及的泛用詞被誤判成非管理層，
+// 進而透過上下文延續機制把後面整份逐字稿都錯誤標成非管理層
+const NON_MGMT_LABEL_PREFIX = /^(主持人|司儀|分析師|投資人|法人|媒體|記者|Investor\s*Relation|IR)[:：]/i;
+// 句首「稱謂+職稱+早安/午安/你好」通常是別人在跟該職稱的人打招呼（例如分析師提問前的開場白：「王經理，早安」），
+// 不是該職稱本人自稱，這種模式很明確、風險低，跟上面「感謝/請+職稱」那種可能是自己人交接發言的情況不同
+const GREETING_TO_TITLE_PAT = /^.{0,6}(總經理|執行長|CEO|CFO|COO|CTO|副總|董事長|經理|協理|財務長|發言人)[，,、]\s*(早安|午安|晚安|您好|你好|大家好)/;
+
+// 回傳 1(管理層)/0(非管理層)/null(無法判斷，交由上層決定 fallback 或送 AI)
+function getRole(sent, lastRole) {
+  // 1. 優先解析 **姓名 - 公司, 職稱** 格式（最可靠）
+  const labelPat = /\*\*[^*]+-[^*]+,\s*([^*]+)\*\*/;
+  const labelMatch = sent.match(labelPat);
+  if (labelMatch) {
+    const title = labelMatch[1].trim();
+    if (MGMT_TITLES.test(title)) return 1;
+    if (NON_MGMT_TITLES.test(title)) return 0;
+  }
+
+  // 2. 解析 **職稱** 單獨格式
+  const boldPat = /\*\*([^*]+)\*\*/;
+  const boldMatch = sent.match(boldPat);
+  if (boldMatch) {
+    const title = boldMatch[1].trim();
+    if (MGMT_TITLES.test(title)) return 1;
+    if (NON_MGMT_TITLES.test(title)) return 0;
+  }
+
+  // 3. 句子本身含明確職稱（無粗體標籤時的次要判斷）
+  // 註：曾嘗試加入「感謝/請+職稱→視為他人稱呼、判非管理層」的規則，
+  // 但實測真實逐字稿後發現：管理層之間互相交接發言（謝謝董事長，接下來由我報告…）
+  // 也會用一樣的說法，誤判後又會透過第 5 步的上下文延續機制擴散，破壞性遠大於它想解決的問題，故不採用。
+  if (GREETING_TO_TITLE_PAT.test(sent.trim())) return 0;
+  if (MGMT_TITLES.test(sent)) return 1;
+  if (NON_MGMT_LABEL_PREFIX.test(sent.trim())) return 0;
+
+  // 4. 上下文保持（沿用前一句角色）
+  if (lastRole !== null) return lastRole;
+
+  // 5. 真的無法判斷
+  return null;
+}
+
+// getPhase 已移除：phase 由 ### Q&A 標記單向控制，見 analyzePhases
+
+function uncRefine(sent) {
+  if (/(成長|擴張|增長|提升|擴大|發展|上升)/.test(sent)) return 1;
+  if (/(風險|壓力|困難|不確定|危險|挑戰|下滑)/.test(sent)) return 2;
+  return 0;
+}
+
+function calcTone(s) {
+  const p = s.pos + s.pos_u, n = s.neg + s.neg_u, l = s.lit;
+  const d = s.pos + s.neg + s.lit + s.unc; // 分母＝正向+負向+爭議+不確定（不含 NONE 與中性排除句）
+  return d === 0 ? 0 : (p - n - l) / d;
+}
+
+// ── 逐字稿切分／分段判斷用的常數（多份檔案共用，跟原本每份各自定義的行為完全一樣） ──
+const QA_START_PAT = /^#{1,3}\s*(q&a|問答|問答環節|提問|analyst\s*q)|^#QA_START/i;
+// 只有「逐字稿開始」標題才算開場白邊界；不能把 q&a/問答環節 也算進來，
+// 否則當逐字稿只有 ## Q&A 這種標題、沒有 ## Transcript 時，會把報告段跟 Q&A 標題本身都當成開場白吃掉
+const TRANSCRIPT_START_PAT = /^#{1,3}\s*(transcript|逐字稿)/i;
+// 實測台股法說會真實逐字稿後發現：光靠固定詞序（例如「Q&A 時間」）漏抓率很高，
+// 因為口語常常是「進行 Q&A」「Q&A 的環節」「意見交流」「問與答」等各種詞序與同義詞。
+// 改用「Q&A 概念詞」+「轉場/開始詞」同句共現來判斷，涵蓋詞序更寬鬆的真實說法；
+// 另外每題前綴「投資先進提問：」這類標籤格式，直接視為已進入問答。
+const QA_CONCEPT_PAT = /Q\s*&?\s*A|問答|提問|意見交(換|流)|問與答/i;
+const QA_TRANSITION_PAT = /接下來|現在|開始|進行|進入|即將|最後|來到|下一(個|個階段)|下個|準備|歡迎|開放|階段/;
+const QA_LABEL_PAT = /^(投資先進|法人|分析師|主持人|Q)[:：]/;
+const QA_TEXT_PAT = /接下來是\s*(Q&A|問答|意見交換|提問時間)|進入\s*(Q&A|問答環節|提問環節|意見交換環節)|^開放提問|Q&A\s*(時間|環節|開始)|question[\s-]*(and|&)[\s-]*answer\s*session|open (the floor|the call) for questions|we('|’)?ll now (take|open for) questions|let'?s (start|begin) the Q&A|operator instructions|now open for questions|this concludes our (key messages|prepared remarks|presentation)/i;
+// 輔助訊號：非管理層提問（含提問用語）後緊接管理層回答，連續出現視為已進入問答段
+const QUESTION_PAT = /請問|想請教|請教一下|請教|想問|可否請教|想了解一下|請問一下/;
+const QA_MIN_SENT = 20;
+
+// ── Pass 1（純字典，不叫 AI）：切句 + 角色判斷（無法判斷回傳 null，留給批次 AI 或 fallback） ──
+function analyzeRoles(text) {
+  const lines = text.split(/\n/);
+  let startLine = 0;
+  for (let i=0; i<lines.length; i++) {
+    if (TRANSCRIPT_START_PAT.test(lines[i].trim())) { startLine = i+1; break; }
+  }
+  const trimmed = startLine > 0 ? lines.slice(startLine).join('\n') : text;
+  const allSents = trimmed.replace(/\[\d+:\d+:\d+\]|Page \d+ of \d+|\[\d+ 分鐘\]/gi,'')
+    .split(/[。！？\n\r]/).map(s=>s.trim()).filter(s=>s.length>3 && !/^\d+$/.test(s));
+
+  if (!allSents.length) return null;
+
+  // 標記行（#QA_START 或 ## Q&A 這類標題）本身不是逐字稿內容，只用來觸發分段，不列入分析
+  const isMarker = allSents.map(s => QA_START_PAT.test(s.trim()));
+
+  let roles = allSents.map(s => getRole(s, null)); // 先不加上下文，看純內容能不能判斷
+  for (let i = 0; i < allSents.length; i++) {
+    if (roles[i] === null) {
+      const lastRole = i > 0 ? roles[i-1] : null;
+      const ex = getRole(allSents[i], lastRole);
+      if (ex !== null) roles[i] = ex;
+    }
+  }
+  return {allSents, isMarker, roles};
+}
+
+// 角色 AI 結果套用完後，剩下真的解不開的 null（AI 關閉/失敗/沒被選進這批）用「沿用前一個已知角色」補上，
+// 跟原本單檔版本的 fallback 邏輯一致
+function resolveRemainingRoles(roles) {
+  let ctx = 1;
+  for (let i = 0; i < roles.length; i++) {
+    if (roles[i] === null) roles[i] = ctx;
+    else ctx = roles[i];
+  }
+}
+
+// ── Pass 2（純字典，不叫 AI，需要先有已解完的 roles）：Q&A 分段判斷 ──
+function analyzePhases(allSents, isMarker, roles) {
+  let qaStarted = false, qaStreak = 0;
+  const phases = allSents.map((s, idx) => {
+    if (!qaStarted) {
+      if (isMarker[idx]) {
+        qaStarted = true;
+      } else if (idx >= QA_MIN_SENT) {
+        if (QA_START_PAT.test(s.trim()) || QA_TEXT_PAT.test(s) || QA_LABEL_PAT.test(s.trim()) || (QA_CONCEPT_PAT.test(s) && QA_TRANSITION_PAT.test(s))) {
+          qaStarted = true;
+        } else if (idx > 0 && roles[idx-1]===0 && QUESTION_PAT.test(allSents[idx-1]) && roles[idx]===1) {
+          qaStreak++;
+          if (qaStreak >= 2) qaStarted = true;
+        } else {
+          qaStreak = 0;
+        }
+      }
+    }
+    return qaStarted ? 1 : 0;
+  });
+  // 關鍵字／輔助訊號全部沒抓到轉折點時（真實逐字稿裡，有些問答轉場完全沒有可辨識的固定說法），
+  // 才需要交給批次 AI 找出「從報告轉為問答」的那一句，避免每份都各自呼叫 AI 增加成本與延遲
+  const needsPhaseAI = !phases.some(p => p === 1) && allSents.length > QA_MIN_SENT;
+  return {phases, needsPhaseAI};
+}
+
+// ── Pass 3：套用最終 roles/phases 後計算統計數據（跟角色/分段判斷完全脫鉤，AI 介入與否都走這條） ──
+function finalizeMetrics(allSents, isMarker, roles, phases) {
+  // 過濾掉標記行，剩下的才是真正拿去分析的句子
+  const keepIdx = [];
+  for (let i=0; i<allSents.length; i++) if (!isMarker[i]) keepIdx.push(i);
+  const rawSents = keepIdx.map(i=>allSents[i]);
+  const finalRoles = keepIdx.map(i=>roles[i]);
+  const finalPhases = keepIdx.map(i=>phases[i]);
+
+  const stats = {
+    P:{pos:0,pos_u:0,neg:0,neg_u:0,lit:0,unc:0,total:0,neutral:0},
+    Q:{pos:0,pos_u:0,neg:0,neg_u:0,lit:0,unc:0,total:0,neutral:0}
+  };
+  const details = [], uncIndices = [];
+
+  rawSents.forEach((sent, i) => {
+    const m = dictMatches(sent);
+    const cats = localCat(sent, m); // 陣列，打平時會有多個類別
+    const ref = uncRefine(sent);
+    const key = finalPhases[i]===0 ? 'P' : 'Q';
+    const role = finalRoles[i];
+    const isUnc = cats.includes('UNC');
+    if (role===1) {
+      if (cats.includes('NEUTRAL')) { stats[key].neutral++; }
+      else {
+        stats[key].total++;
+        cats.forEach(cat => {
+          if (cat==='UNC') {
+            stats[key].unc++;
+            if (ref===1) stats[key].pos_u++;
+            else if (ref===2) stats[key].neg_u++;
+          } else if (cat!=='NONE') {
+            const k = cat.toLowerCase();
+            if (stats[key][k]!==undefined) stats[key][k]++;
+          }
+        });
+        if (isUnc) uncIndices.push({detailIdx:details.length, key});
+      }
+    }
+    details.push({
+      sentence:sent, role, phase:finalPhases[i], localCat:cats.join('+'), refine:isUnc?ref:0, aiRefined:false,
+      posWords:m.POS.join('，'),
+      negWords:m.NEG.join('，'),
+      litWords:m.LIT.join('，'),
+      uncWords:m.UNC.join('，'),
+    });
+  });
+
+  const merged = {pos:stats.P.pos+stats.Q.pos,pos_u:stats.P.pos_u+stats.Q.pos_u,neg:stats.P.neg+stats.Q.neg,neg_u:stats.P.neg_u+stats.Q.neg_u,lit:stats.P.lit+stats.Q.lit,unc:stats.P.unc+stats.Q.unc};
+  return {Tone_P:calcTone(stats.P),Tone_Q:calcTone(stats.Q),Tone_T:calcTone(merged),counts:stats,details,uncIndices};
+}
+
+function empty() {
+  const s={pos:0,pos_u:0,neg:0,neg_u:0,lit:0,unc:0,total:0,neutral:0};
+  return {Tone_P:0,Tone_Q:0,Tone_T:0,counts:{P:{...s},Q:{...s}},details:[],uncIndices:[],aiUsed:false,aiError:false};
+}
+
+// ── Gemini AI ──────────────────────────────────────────────────────
+// 舊版是「每份檔案各自呼叫 AI」，2429 份的真實批次一次跑下來，光角色判斷跟 UNC 判斷加起來
+// 可能就是幾千次 API 呼叫，遠遠超過免費額度（20 次/日）。改成「整批次只呼叫幾次」：
+// 先把所有檔案都跑完純字典分析，把「需要 AI 幫忙」的項目（不確定角色的句子、找不到 Q&A 起點的檔案、
+// UNC 句子）全部彙整成一份全域清單，再依文字量切成盡量少的幾個大請求一次送出，
+// 用「F{檔案序號}S{句子序號}」這種全域唯一編號當 key，讓一次回應就能同時解掉所有檔案的問題。
+const GMINI_PROMPT = `你是一位財務語言學專家。請判斷以下被字典法列為「不確定(UNC)」的句子，這句話描述的財務或營運狀況，對公司來說整體是正面還是負面訊號。
+- 若整體是正面訊號 → 回傳 1，例如：業績成長、獲利提升、負債比下降、成本下降、毛利率上升、市佔提升、樂觀展望等
+- 若整體是負面訊號 → 回傳 2，例如：業績衰退、獲利下滑、負債比上升、成本上升、毛利率下降、市佔流失、風險與警示等
+- 若這句話只是中性敘述、看不出對公司是好是壞 → 回傳 0
+請特別注意：即使句子沒有出現「成長」「風險」這類字眼，只要描述的數字或狀態變化方向對公司明顯有利或不利（例如負債比、成本、費用率等財務比率下降通常是好事，上升通常是壞事），也要據此判斷為正面或負面，不要只因為沒出現關鍵字就回傳 0。
+以下每行格式為「編號 句子」，編號是全域唯一識別碼，不代表順序。
+請嚴格以 JSON 物件格式回傳，key 為編號，value 為 0/1/2，不得有任何其他文字。範例：{"F3D5":1,"F3D6":0}`;
+
+const CLASSIFY_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿中，不確定角色的句子與其前後文片段，每行格式為「編號 角色標記 句子內容」（同一份檔案的片段之間用「...」分隔，代表中間省略）。
+編號格式為 F<檔案序號>S<句子序號>，是全域唯一識別碼，不代表句子的實際順序，你只需要根據每行前後文脈絡判斷該行的角色。
+角色標記說明：
+- [管理層] 表示這句已確定是公司管理層（總經理/執行長/財務長等）本人發言，僅供你參考上下文，不需要你判斷
+- [其他] 表示這句已確定不是管理層發言（主持人/分析師/投資人等），僅供你參考上下文，不需要你判斷
+- [?] 表示這句角色還不確定，需要你根據前後文的對話脈絡（例如前後是誰在說話、話題如何銜接）來判斷
+
+請針對每一個標記為 [?] 的句子，判斷該句是否為管理層本人發言：
+- 1 表示是管理層發言
+- 0 表示不是管理層發言
+
+請嚴格以 JSON 物件格式回傳，key 為該句編號（例如 "F3S57"），value 為 0 或 1，只需包含 [?] 的句子，不得有任何其他文字。範例：{"F3S57":1,"F3S61":0}`;
+
+const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿的句子列表，每行格式為「編號 句子」，編號格式為 F<檔案序號>S<句子序號>，是全域唯一識別碼。
+請針對每一份檔案（依 F 後面的檔案序號分組），各自找出「從管理層報告，正式轉為開放問答（Q&A）」的第一句編號——也就是真正開始有人（主持人或投資人）在問問題、或管理層開始處理提問內容的第一句，
+而不是預告「等一下會有Q&A」這種還在報告階段的句子，也不是事後才提到「謝謝大家的提問」這種已經結束的句子。
+如果某份檔案完全找不到明確的問答轉折點，該檔案不用出現在回傳結果中。
+請嚴格以 JSON 物件格式回傳，key 為檔案序號（例如 "3"），value 為該檔案問答起始句的完整編號字串（例如 "F3S57"），不得有任何其他文字。範例：{"3":"F3S57","9":"F9S102"}`;
+
+// 每次 API 請求打包的輸入文字上限（字元數）。gemini-2.5-flash context window 很大（可達百萬 token），
+// 這裡刻意抓保守值（避免單次 request 過大失敗），優先把多份檔案的內容塞進同一次請求，
+// 讓整批次的呼叫次數盡量壓到最少，而不是像舊版一樣一份檔案至少一次呼叫。
+const BATCH_CHUNK_CHARS = 200000;
+
+function packIntoChunks(groups, metas) {
+  // groups: string[]，每個元素是一份檔案這個階段要送的文字區塊；metas（可選）為對應的附加資訊（例如 fileIdx），
+  // 跟 groups 一一對應，回傳的每個 chunk 會一併帶出 texts 與 metas，讓呼叫方能知道這個 chunk 涵蓋哪些檔案
+  const chunks = [];
+  let curTexts = [], curMetas = [], curLen = 0;
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    if (curLen + g.length > BATCH_CHUNK_CHARS && curTexts.length) {
+      chunks.push({texts: curTexts, metas: curMetas});
+      curTexts = []; curMetas = []; curLen = 0;
+    }
+    curTexts.push(g); if (metas) curMetas.push(metas[i]); curLen += g.length;
+  }
+  if (curTexts.length) chunks.push({texts: curTexts, metas: curMetas});
+  return chunks;
+}
+
+// 批次角色分類：fileEntries = [{fileIdx, allSents, roles}]，roles 內 null 代表這句角色不確定，
+// 會被原地補上 AI 判斷結果（呼叫方傳進來的 roles 陣列會被直接修改）。
+async function batchClassifyRoles(fileEntries, apiKey) {
+  const CONTEXT_BEFORE = 5, CONTEXT_AFTER = 15;
+  const items = []; // {fileIdx, sentIdx, label}
+  const groups = [];
+
+  fileEntries.forEach(({fileIdx, allSents, roles}) => {
+    const unclearIdx = [];
+    roles.forEach((r,i) => { if (r === null) unclearIdx.push(i); });
+    if (!unclearIdx.length) return;
+    const blocks = [];
+    let start = unclearIdx[0], prev = unclearIdx[0];
+    for (let k = 1; k <= unclearIdx.length; k++) {
+      const cur = unclearIdx[k];
+      if (cur !== prev + 1) { blocks.push([start, prev]); start = cur; }
+      prev = cur;
+    }
+    const windows = blocks.map(([s,e]) => [Math.max(0, s-CONTEXT_BEFORE), Math.min(allSents.length-1, e+CONTEXT_AFTER)]);
+    windows.sort((a,b)=>a[0]-b[0]);
+    const merged = [];
+    for (const w of windows) {
+      if (merged.length && w[0] <= merged[merged.length-1][1] + 1) {
+        merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], w[1]);
+      } else merged.push([...w]);
+    }
+    const lines = [];
+    merged.forEach(([s,e], bi) => {
+      if (bi > 0) lines.push('...');
+      for (let i = s; i <= e; i++) {
+        const label = `F${fileIdx}S${i}`;
+        const tag = roles[i]===1 ? '[管理層]' : roles[i]===0 ? '[其他]' : '[?]';
+        if (roles[i] === null) items.push({fileIdx, sentIdx: i, label});
+        lines.push(`${label} ${tag} ${allSents[i]}`);
+      }
+    });
+    groups.push(lines.join('\n'));
+  });
+
+  if (!items.length) return {usedFiles: new Set(), errorFiles: new Set()};
+
+  const chunks = packIntoChunks(groups);
+  const resultMap = {};
+  for (const chunk of chunks) {
+    try {
+      const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          contents: [{parts: [{text: chunk.texts.join('\n\n')}]}],
+          systemInstruction: {parts: [{text: CLASSIFY_PROMPT}]},
+          generationConfig: {temperature: 0, maxOutputTokens: 65536, responseMimeType: 'application/json'}
+        })
+      });
+      if (!res.ok) throw new Error('API error');
+      const d = await res.json();
+      const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      Object.assign(resultMap, JSON.parse(raw.replace(/```json|```/g, '').trim()));
+    } catch (e) { /* 這個 chunk 沒有結果的項目，下面統一標記成 errorFiles（每個不確定角色一定要有答案，沒出現在結果裡就是失敗） */ }
+  }
+
+  const usedFiles = new Set(items.map(it => it.fileIdx));
+  const errorFiles = new Set();
+  const byFile = new Map();
+  fileEntries.forEach(f => byFile.set(f.fileIdx, f.roles));
+  items.forEach(({fileIdx, sentIdx, label}) => {
+    if (label in resultMap && [0,1].includes(resultMap[label])) {
+      byFile.get(fileIdx)[sentIdx] = resultMap[label];
+    } else {
+      errorFiles.add(fileIdx);
+    }
+  });
+  return {usedFiles, errorFiles};
+}
+
+// 批次 Q&A 起點判斷：fileEntries = [{fileIdx, allSents}]（只包含關鍵字判斷失敗、需要 AI 的檔案）
+async function batchFindQAStart(fileEntries, apiKey) {
+  if (!fileEntries.length) return {resultIdx: new Map(), usedFiles: new Set(), errorFiles: new Set()};
+  // metas 記錄每個 chunk 涵蓋到哪些 fileIdx，這樣「這個 chunk 的請求真的失敗」才算 AI 錯誤；
+  // 「請求成功、但這份檔案就是沒有轉折點」是合法結果（照 prompt 說明本來就不會出現在回傳裡），不算失敗
+  const fileIdxList = fileEntries.map(f => f.fileIdx);
+  const groups = fileEntries.map(({fileIdx, allSents}) =>
+    allSents.slice(QA_MIN_SENT).map((s,j) => `F${fileIdx}S${QA_MIN_SENT+j} ${s}`).join('\n')
+  );
+  const chunks = packIntoChunks(groups, fileIdxList);
+
+  const resultMap = {}; // "fileIdx" -> "F{fileIdx}S{n}"
+  const errorFiles = new Set();
+  for (const chunk of chunks) {
+    try {
+      const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          contents: [{parts: [{text: chunk.texts.join('\n\n')}]}],
+          systemInstruction: {parts: [{text: QA_FINDER_PROMPT}]},
+          generationConfig: {temperature: 0, maxOutputTokens: 8000, responseMimeType: 'application/json'}
+        })
+      });
+      if (!res.ok) throw new Error('API error');
+      const d = await res.json();
+      const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      Object.assign(resultMap, JSON.parse(raw.replace(/```json|```/g, '').trim()));
+    } catch (e) { chunk.metas.forEach(fi => errorFiles.add(fi)); }
+  }
+
+  const usedFiles = new Set(fileEntries.map(f => f.fileIdx));
+  const resultIdx = new Map(); // fileIdx -> sentIdx
+  fileEntries.forEach(({fileIdx}) => {
+    if (errorFiles.has(fileIdx)) return;
+    const label = resultMap[String(fileIdx)];
+    if (!label) return; // 請求成功但沒找到轉折點，維持純字典結果，不算錯誤
+    const m = /^F(\d+)S(\d+)$/.exec(label);
+    if (m && Number(m[1]) === fileIdx) resultIdx.set(fileIdx, Number(m[2]));
+    else errorFiles.add(fileIdx);
+  });
+  return {resultIdx, usedFiles, errorFiles};
+}
+
+// 批次 UNC 句子方向判斷：items = [{label, sentence}]（label 全域唯一，例如 "F3D5"）
+async function batchRefine(items, apiKey) {
+  if (!items.length) return {resultMap: {}, error: false};
+  const CHUNK = 400; // 舊版是「每份檔案各自 20 句一批」，改成跨檔案一起打包，大幅減少呼叫次數
+  const resultMap = {};
+  let hadError = false;
+  for (let i = 0; i < items.length; i += CHUNK) {
+    const chunk = items.slice(i, i + CHUNK);
+    const msg = chunk.map(it => `${it.label} ${it.sentence}`).join('\n');
+    let delay = 1000, ok = false;
+    for (let r = 0; r < 4; r++) {
+      try {
+        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:8000, responseMimeType:'application/json'}})
+        });
+        if (res.status === 429 || res.status >= 500) { await sleep(delay); delay *= 1.8; continue; }
+        if (!res.ok) { hadError = true; ok = true; break; }
+        const d = await res.json();
+        const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        Object.assign(resultMap, JSON.parse(raw.replace(/```json|```/g, '').trim()));
+        ok = true; break;
+      } catch (e) {
+        if (r === 3) hadError = true;
+        else { await sleep(delay); delay *= 1.8; }
+      }
+    }
+    if (!ok) hadError = true;
+    if (i + CHUNK < items.length) await sleep(500);
+  }
+  return {resultMap, error: hadError};
+}
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+// fetch 本身沒有預設逾時，如果 API 卡住或回應極慢，await 會永遠卡住、整個批次跟著卡死。
+// 用 AbortController 強制在 GEMINI_TIMEOUT_MS 後放棄這次請求，讓上層的 catch 接手、繼續跑下一份。
+const GEMINI_TIMEOUT_MS = 20000;
+function fetchWithTimeout(url, options, timeoutMs = GEMINI_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {...options, signal: controller.signal}).finally(() => clearTimeout(timer));
+}
+
+// ── UI Helpers ─────────────────────────────────────────────────────
+function toneColor(v){return v>0.1?'var(--pos)':v<-0.1?'var(--neg)':'var(--unc)';}
+function toneBar(v,color){return `<span class="tbar"><span class="tbar-fill" style="width:${Math.min(100,Math.abs(v)*100)}%;background:${color}"></span></span>`;}
+
+function setAiStatus(s){
+  const el=document.getElementById('ai-status');
+  if(s==='running') el.innerHTML='<span class="b-ai-on">AI 分析中</span>';
+  else if(s==='done') el.innerHTML='<span class="b-ai-on">✓ 完成</span>';
+  else if(s==='error') el.innerHTML='<span class="b-ai-off">！失敗</span>';
+  else el.innerHTML='';
+}
+
+// ── Exclusion Panel ────────────────────────────────────────────────
+function renderExclPanel() {
+  document.getElementById('excl-count').textContent = exclusions.length + ' 條規則';
+  const bycat = {};
+  exclusions.forEach(ex=>{
+    if(!bycat[ex.category]) bycat[ex.category]=[];
+    bycat[ex.category].push(ex);
+  });
+  const cats = document.getElementById('excl-cats');
+  cats.innerHTML = Object.entries(bycat).map(([cat,items])=>{
+    const m = CAT_META[cat]||{label:cat,cls:'cat-custom',emoji:'•'};
+    const tags = items.map(ex=>`<span class="excl-tag">${ex.label}<button onclick="removeExcl('${ex.id}')">✕</button></span>`).join('');
+    return `<div style="margin-top:12px"><div style="display:flex;align-items:center;margin-bottom:5px"><span class="cat-lbl ${m.cls}">${m.emoji} ${m.label}</span><span style="font-size:9px;color:var(--tx2)">${items.length} 條</span></div><div>${tags}</div></div>`;
+  }).join('');
+}
+function toggleExcl(){
+  const b=document.getElementById('excl-body');
+  const a=document.getElementById('excl-arrow');
+  const open = b.style.display==='none';
+  b.style.display = open?'block':'none';
+  a.style.transform = open?'rotate(180deg)':'';
+  if(open) renderExclPanel();
+}
+function removeExcl(id){
+  exclusions=exclusions.filter(e=>e.id!==id);
+  renderExclPanel();
+}
+function addExclusion(){
+  const v=document.getElementById('new-word').value.trim();
+  if(!v) return;
+  exclusions.push({id:'c_'+Date.now(),category:'custom',label:v,type:document.getElementById('new-type').value,value:v});
+  document.getElementById('new-word').value='';
+  renderExclPanel();
+}
+function resetExclusions(){exclusions=[...DEFAULT_EXCLUSIONS];renderExclPanel();}
+
+// ── API Key toggle ─────────────────────────────────────────────────
+function toggleApiKey(){
+  const inp=document.getElementById('api-key');
+  const btn=document.getElementById('api-toggle');
+  inp.type=inp.type==='password'?'text':'password';
+  btn.textContent=inp.type==='password'?'顯示':'隱藏';
+}
+document.getElementById('api-key').addEventListener('input',function(){
+  const on=this.value.trim().length>10;
+  const bar=document.getElementById('api-bar');
+  const lbl=document.getElementById('api-label');
+  bar.className='api-bar '+(on?'on':'off');
+  lbl.style.color=on?'var(--pos)':'var(--lit)';
+  lbl.textContent='Gemini AI 二次分析 '+(on?'● 已啟用':'○ 未設定');
+});
+
+// ── Tab switch ─────────────────────────────────────────────────────
+function switchTab(t){
+  document.getElementById('tab-batch').className='tab'+(t==='batch'?' active':'');
+  document.getElementById('tab-manual').className='tab'+(t==='manual'?' active':'');
+  document.getElementById('pane-batch').style.display=t==='batch'?'block':'none';
+  document.getElementById('pane-manual').style.display=t==='manual'?'block':'none';
+}
+
+// ── Queue ──────────────────────────────────────────────────────────
+function renderQueue(){
+  const g=document.getElementById('queue-grid');
+  const e=document.getElementById('queue-empty');
+  document.getElementById('q-count').textContent=queue.length;
+  if(!queue.length){e.style.display='block';g.innerHTML='';return;}
+  e.style.display='none';
+  g.innerHTML=queue.map((item,i)=>{
+    const cls=i===currentIdx?'active':item.status==='done'?'done':item.status==='error'?'error':'';
+    const icon=item.status==='done'?`<span style="color:var(--pos)">✓</span>`:item.status==='error'?`<span style="color:var(--neg);font-size:9px">ERR</span>`:i===currentIdx?`<div style="width:10px;height:10px;border:2px solid var(--ac);border-top-color:transparent;border-radius:50%" class="spin"></div>`:`<span style="font-size:9px;color:var(--tx2)">WAIT</span>`;
+    return `<div class="q-item ${cls}"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</span>${icon}</div>`;
+  }).join('');
+  const done=queue.filter(i=>i.status==='done').length;
+  document.getElementById('prog-wrap').style.display=queue.length?'block':'none';
+  document.getElementById('prog-fill').style.width=(done/queue.length*100)+'%';
+  document.getElementById('prog-text').textContent=`${done}/${queue.length} 完成`;
+  document.getElementById('run-btn').disabled=processing||!queue.length;
+}
+
+function handleFiles(inp){
+  Array.from(inp.files).forEach(f=>queue.push({name:f.name.replace(/\.txt$/i,''),type:'file',content:f,status:'pending'}));
+  inp.value=''; renderQueue();
+}
+function addManual(){
+  const n=document.getElementById('m-name').value.trim();
+  const t=document.getElementById('m-text').value.trim();
+  if(!n||!t) return;
+  queue.push({name:n,type:'text',content:t,status:'pending'});
+  document.getElementById('m-name').value='';
+  document.getElementById('m-text').value='';
+  renderQueue();
+}
+function addTestSample(){
+  queue.push({name:'測試樣本',type:'text',content:'各位投資先進，大家午安。歡迎參加本次法人說明會。管理層表示，公司今年業績成長顯著，獲利創歷史新高。分析師詢問風險問題。董事長回應，我們有充分準備應對不確定性。謝謝各位的聆聽，謝謝。',status:'pending'});
+  renderQueue();
+}
+function clearQueue(){queue=[];renderQueue();}
+function clearAll(){queue=[];results=[];currentIdx=-1;renderQueue();renderResults();}
+
+// ── Run ────────────────────────────────────────────────────────────
+// 整個批次分成幾個階段跑：先把所有檔案都做完純字典分析（不叫 AI），
+// 再把「需要 AI 幫忙」的項目整批彙整起來，一次性（或依大小切成盡量少的幾個請求）送給 Gemini，
+// 而不是像舊版一樣每份檔案各自呼叫 AI（幾千份檔案就是幾千次呼叫，免費額度一下就用完）。
+// 代價是：畫面上的完成勾勾會在「全部檔案的所有階段都跑完」才一次性打勾，
+// 不會像舊版一樣一份一份即時打勾，但這是把 API 呼叫次數壓到最低的必要取捨。
+async function runBatch(){
+  if(processing||!queue.length) return;
+  processing=true;
+  document.getElementById('proc-badge').style.display='flex';
+  document.getElementById('run-btn').disabled=true;
+  setAiStatus('');
+  const apiKey=document.getElementById('api-key').value.trim();
+  const aiOn=apiKey.length>10;
+  const RENDER_MIN_INTERVAL = 300;
+  let lastRenderAt = 0;
+
+  const pending = [];
+  for (let i=0;i<queue.length;i++) if (queue[i].status!=='done') pending.push(i);
+
+  // ── Pass 1：純字典分析（切句 + 角色），不叫 AI ──────────────────
+  const files = []; // {qIdx, fileIdx, name, allSents, isMarker, roles, aiUsed, aiError}
+  for (let k=0; k<pending.length; k++) {
+    const i = pending[k];
+    currentIdx = i;
+    document.getElementById('proc-text').textContent=`讀取分析中 ${k+1}/${pending.length}`;
+    const now = performance.now();
+    const shouldRender = (now - lastRenderAt >= RENDER_MIN_INTERVAL) || k === pending.length-1;
+    if (shouldRender) { renderQueue(); lastRenderAt = now; }
+    try {
+      let text;
+      if(queue[i].type==='file'){
+        const buf=await queue[i].content.arrayBuffer();
+        try{text=new TextDecoder('utf-8',{fatal:true}).decode(buf);}
+        catch{text=new TextDecoder('big5').decode(buf);}
+      } else text=queue[i].content;
+      const local = analyzeRoles(text);
+      if (!local) { results.push({name:queue[i].name,...empty()}); queue[i].status='done'; continue; } // 空白/無有效句內容，視為合法的全零結果，不算錯誤
+      files.push({qIdx:i, fileIdx:k, name:queue[i].name, allSents:local.allSents, isMarker:local.isMarker, roles:local.roles, aiUsed:false, aiError:false});
+    } catch(e) { queue[i].status='error'; }
+    if (shouldRender) await sleep(0);
+  }
+  currentIdx = -1;
+
+  // ── Pass 2：批次角色分類 AI（整批只呼叫幾次，而不是一份檔案一次）──────
+  if (aiOn) {
+    const needRoles = files.filter(f => f.roles.some(r => r===null));
+    if (needRoles.length) {
+      document.getElementById('proc-text').textContent=`AI 角色判斷中...`;
+      setAiStatus('running'); renderQueue();
+      const {usedFiles, errorFiles} = await batchClassifyRoles(needRoles.map(f=>({fileIdx:f.fileIdx, allSents:f.allSents, roles:f.roles})), apiKey);
+      files.forEach(f => { if (usedFiles.has(f.fileIdx)) f.aiUsed = true; if (errorFiles.has(f.fileIdx)) f.aiError = true; });
+      setAiStatus(errorFiles.size ? 'error' : 'done');
+    }
+  }
+  files.forEach(f => resolveRemainingRoles(f.roles));
+
+  // ── Pass 3：Q&A 分段判斷（純字典，需要先有已解完的角色）──────────
+  const needPhaseAI = [];
+  files.forEach(f => {
+    const {phases, needsPhaseAI} = analyzePhases(f.allSents, f.isMarker, f.roles);
+    f.phases = phases;
+    if (needsPhaseAI) needPhaseAI.push(f);
+  });
+
+  // ── Pass 4：批次 Q&A 起點 AI（只有關鍵字判斷失敗的檔案才需要）───────
+  if (aiOn && needPhaseAI.length) {
+    document.getElementById('proc-text').textContent=`AI 問答起點判斷中...`;
+    setAiStatus('running'); renderQueue();
+    const {resultIdx, usedFiles, errorFiles} = await batchFindQAStart(needPhaseAI.map(f=>({fileIdx:f.fileIdx, allSents:f.allSents})), apiKey);
+    needPhaseAI.forEach(f => {
+      if (usedFiles.has(f.fileIdx)) f.aiUsed = true;
+      if (errorFiles.has(f.fileIdx)) f.aiError = true;
+      const foundIdx = resultIdx.get(f.fileIdx);
+      if (foundIdx !== undefined) for (let i=foundIdx; i<f.phases.length; i++) f.phases[i]=1;
+    });
+    setAiStatus(errorFiles.size ? 'error' : 'done');
+  }
+
+  // ── Pass 5：計算統計數據，收集 UNC 句子（純字典，先不套用 AI 方向）───
+  const uncPool = []; // {label, sentence, fileIdx, detailIdx, key}
+  files.forEach(f => {
+    f.metrics = finalizeMetrics(f.allSents, f.isMarker, f.roles, f.phases);
+    f.metrics.uncIndices.forEach(u => {
+      uncPool.push({label:`F${f.fileIdx}D${u.detailIdx}`, sentence:f.metrics.details[u.detailIdx].sentence, fileIdx:f.fileIdx, detailIdx:u.detailIdx, key:u.key});
+    });
+  });
+
+  // ── Pass 6：批次 UNC 方向 AI（整批只呼叫幾次）───────────────────
+  if (aiOn && uncPool.length) {
+    document.getElementById('proc-text').textContent=`AI 不確定句判斷中...`;
+    setAiStatus('running'); renderQueue();
+    const {resultMap, error} = await batchRefine(uncPool.map(u=>({label:u.label, sentence:u.sentence})), apiKey);
+    const byFile = new Map();
+    files.forEach(f => byFile.set(f.fileIdx, f));
+    const touchedFiles = new Set(uncPool.map(u=>u.fileIdx));
+    touchedFiles.forEach(fi => { const f = byFile.get(fi); if (f) { f.aiUsed = true; if (error) f.aiError = true; } });
+    uncPool.forEach(u => {
+      const f = byFile.get(u.fileIdx);
+      const v = resultMap[u.label];
+      if ([0,1,2].includes(v)) {
+        f.metrics.details[u.detailIdx].refine = v;
+        f.metrics.details[u.detailIdx].aiRefined = true;
+      }
+    });
+    files.forEach(f => {
+      if (!f.metrics.uncIndices.length) return;
+      const nc = {P:{...f.metrics.counts.P,pos_u:0,neg_u:0}, Q:{...f.metrics.counts.Q,pos_u:0,neg_u:0}};
+      f.metrics.uncIndices.forEach(u => {
+        const v = f.metrics.details[u.detailIdx].refine;
+        if (v===1) nc[u.key].pos_u++;
+        else if (v===2) nc[u.key].neg_u++;
+      });
+      const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
+      f.metrics.counts = nc;
+      f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
+    });
+    setAiStatus(error ? 'error' : 'done');
+  }
+
+  // ── 收尾：寫回 results/queue，畫面渲染 ───────────────────────────
+  files.forEach(f => {
+    results.push({name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError});
+    queue[f.qIdx].status='done';
+  });
+
+  processing=false; currentIdx=-1;
+  renderQueue(); renderResults();
+  document.getElementById('proc-badge').style.display='none';
+  document.getElementById('run-btn').disabled=false;
+  renderQueue();
+}
+
+// ── Results Table ──────────────────────────────────────────────────
+function renderResults(){
+  const empty=document.getElementById('results-empty');
+  const tbl=document.getElementById('results-table');
+  const body=document.getElementById('results-body');
+  document.getElementById('result-count').textContent=results.length;
+  if(!results.length){empty.style.display='block';tbl.style.display='none';return;}
+  empty.style.display='none'; tbl.style.display='table';
+  body.innerHTML=results.map((r,i)=>{
+    const tp=r.counts.P.pos+r.counts.P.pos_u+r.counts.Q.pos+r.counts.Q.pos_u;
+    const tn=r.counts.P.neg+r.counts.P.neg_u+r.counts.Q.neg+r.counts.Q.neg_u;
+    const tl=r.counts.P.lit+r.counts.Q.lit;
+    const tu=r.counts.P.unc+r.counts.Q.unc;
+    const tneu=(r.counts.P.neutral||0)+(r.counts.Q.neutral||0);
+    const ts=r.counts.P.total+r.counts.Q.total;
+    const tc=toneColor(r.Tone_T);
+    return `<tr class="fade-in">
+      <td style="font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</td>
+      <td class="mono" style="color:${toneColor(r.Tone_P)}">${r.Tone_P.toFixed(4)}</td>
+      <td class="mono" style="color:${toneColor(r.Tone_Q)}">${r.Tone_Q.toFixed(4)}</td>
+      <td><span class="mono" style="font-weight:700;color:${tc}">${r.Tone_T.toFixed(4)}</span>${toneBar(r.Tone_T,tc)}</td>
+      <td class="mono" style="color:var(--pos)">${tp}</td>
+      <td class="mono" style="color:var(--neg)">${tn}</td>
+      <td class="mono" style="color:var(--lit)">${tl}</td>
+      <td class="mono" style="color:var(--unc)">${tu}</td>
+      <td class="mono" style="color:var(--neu)">${tneu}</td>
+      <td class="mono" style="color:var(--tx2)">${ts}</td>
+      <td>${(r.aiUsed&&!r.aiError)?'<span class="b-ai-on">✓ AI</span>':'<span class="b-ai-off">字典</span>'}</td>
+      <td><button class="view-btn" onclick="openModal(${i})">查看 →</button></td>
+    </tr>`;
+  }).join('');
+  // stats
+  document.getElementById('export-card').style.display='block';
+  document.getElementById('stats-card').style.display='block';
+  const avg=(results.reduce((s,r)=>s+r.Tone_T,0)/results.length).toFixed(3);
+  document.getElementById('stat-grid').innerHTML=`
+    <div class="stat"><div class="stat-n" style="color:var(--pos)">${results.length}</div><div class="stat-l">已分析樣本</div></div>
+    <div class="stat"><div class="stat-n" style="color:var(--a2)">${avg}</div><div class="stat-l">平均 Tone_T</div></div>
+    <div class="stat"><div class="stat-n" style="color:var(--pos)">${results.filter(r=>r.Tone_T>0).length}</div><div class="stat-l">正向樣本數</div></div>
+    <div class="stat"><div class="stat-n" style="color:var(--neg)">${results.filter(r=>r.Tone_T<0).length}</div><div class="stat-l">負向樣本數</div></div>`;
+}
+
+// ── Detail Modal ───────────────────────────────────────────────────
+const CAT_LABEL={POS:'正向',NEG:'負向',LIT:'法律',UNC:'不確定',NEUTRAL:'中性排除',NONE:'無命中'};
+const CAT_CLS={POS:'b-pos',NEG:'b-neg',LIT:'b-lit',UNC:'b-unc',NEUTRAL:'b-neu',NONE:'b-none'};
+
+function openModal(idx){
+  detailResult=results[idx];
+  modalFilter='ALL';
+  document.getElementById('modal-title').textContent=detailResult.name;
+  renderModal();
+  document.getElementById('modal').style.display='flex';
+}
+function closeModal(){document.getElementById('modal').style.display='none';}
+
+function renderModal(){
+  const d=detailResult;
+  const cats=['ALL','POS','NEG','LIT','UNC','NEUTRAL','NONE'];
+  const counts={};
+  cats.forEach(c=>{counts[c]=c==='ALL'?d.details.length:d.details.filter(x=>x.localCat.split('+').includes(c)).length;});
+  document.getElementById('modal-filters').innerHTML=cats.map(c=>`
+    <button class="filt-btn${modalFilter===c?' active':''}" onclick="setFilter('${c}')">
+      ${c==='ALL'?`全部 (${counts[c]})`:CAT_LABEL[c]+` (${counts[c]})`}
+    </button>`).join('');
+  const filtered=modalFilter==='ALL'?d.details:d.details.filter(x=>x.localCat.split('+').includes(modalFilter));
+  document.getElementById('modal-body').innerHTML=filtered.length?filtered.map(row=>{
+    const rowCats=row.localCat.split('+');
+    const chips=[
+      ...row.posWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-pos">+${w}</span>`),
+      ...row.negWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-neg">−${w}</span>`),
+      ...row.litWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-lit">§${w}</span>`),
+      ...row.uncWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-unc">?${w}</span>`),
+    ].join('');
+    const refBadge=row.refine>0?`<span class="badge" style="background:rgba(124,58,237,.2);color:var(--a2)">${row.refine===1?'▲ 修正正向':'▼ 修正負向'}${row.aiRefined?' (AI)':''}</span>`:'';
+    const catBadges=rowCats.map(c=>`<span class="badge ${CAT_CLS[c]}">${CAT_LABEL[c]}</span>`).join('');
+    return `<div class="s-card${rowCats.includes('NEUTRAL')?' neutral':''}">
+      <div class="s-meta">
+        ${catBadges}
+        <span class="badge b-none">${row.role===1?'管理層':'非管理層'}</span>
+        <span class="badge b-none">${row.phase===0?'報告段':'問答段'}</span>
+        ${refBadge}
+      </div>
+      <div class="s-text${rowCats.includes('NEUTRAL')?' dim':''}">${row.sentence}</div>
+      ${chips?`<div class="chips">${chips}</div>`:''}
+    </div>`;
+  }).join(''):'<div style="text-align:center;color:var(--tx2);font-size:12px;padding:40px">無相符句子</div>';
+}
+function setFilter(f){modalFilter=f;renderModal();}
+
+// ── Export ─────────────────────────────────────────────────────────
+function csvEsc(v){ return `"${String(v==null?'':v).replace(/"/g,'""')}"`; }
+function exportSummary(){
+  if(!results.length) return;
+  const hdr='Company,Tone_P,Tone_Q,Tone_T,Pos_P,Neg_P,Lit_P,Unc_P,Neutral_P,Total_P,Pos_Q,Neg_Q,Lit_Q,Unc_Q,Neutral_Q,Total_Q\n';
+  const rows=results.map(r=>{
+    const{P,Q}=r.counts;
+    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total}`;
+  });
+  dl('\uFEFF'+hdr+rows.join('\n'),'Tone_Summary.csv');
+}
+function exportDetail(){
+  if(!results.length) return;
+  const hdr='Company,Sentence,Role,Phase,LocalCat,Refine,AiRefined,PosWords,NegWords,LitWords,UncWords,Tone_P,Tone_Q,Tone_T\n';
+  const rows=[];
+  results.forEach(r=>{
+    (r.details||[]).forEach(d=>{
+      rows.push(`${csvEsc(r.name)},${csvEsc((d.sentence||'').replace(/\n/g,' '))},${d.role},${d.phase},${d.localCat},${d.refine},${d.aiRefined?1:0},${csvEsc(d.posWords)},${csvEsc(d.negWords)},${csvEsc(d.litWords)},${csvEsc(d.uncWords)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)}`);
+    });
+  });
+  dl('\uFEFF'+hdr+rows.join('\n'),'Tone_Detail.csv');
+}
+function dl(content,filename){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([content],{type:'text/csv;charset=utf-8;'}));
+  a.download=filename; a.click();
+}
+
+// ── Init ───────────────────────────────────────────────────────────
+renderQueue();
+renderResults();
+document.getElementById('excl-count').textContent=exclusions.length+' 條規則';
+</script>
+</body>
+</html>
