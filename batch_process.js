@@ -386,7 +386,7 @@ function parseRetryDelaySeconds(errBody) {
   return null;
 }
 
-async function callGemini(systemPrompt, promptText) {
+async function callGemini(systemPrompt, promptText, maxOutputTokens = 8192) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   let delay = 2000;
@@ -398,7 +398,7 @@ async function callGemini(systemPrompt, promptText) {
         body: JSON.stringify({
           contents: [{ parts: [{ text: promptText }] }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json' }
+          generationConfig: { temperature: 0, maxOutputTokens, responseMimeType: 'application/json' }
         }),
         signal: AbortSignal.timeout(90000)
       });
@@ -427,6 +427,27 @@ async function callGemini(systemPrompt, promptText) {
       delay *= 2;
     }
   }
+}
+
+// 舊版是「固定每 40 或 10 份檔案一個 chunk」，跟檔案實際內容量完全脫鉤——
+// 如果那 40 份檔案剛好角色不確定的句子特別多，組出來的 JSON 回應就可能超過 maxOutputTokens
+// 被硬生生截斷，導致 JSON.parse 失敗，看起來像「AI 判讀失敗」。真實測試也證實：單一檔案沒事，
+// 2000+ 份檔案的大批次就會失敗，因為固定檔案數的 chunk 在檔案一多、平均內容量一大時完全兜不住。
+// 改成跟網頁版一致：依「總字元數」動態切 chunk，內容多的自動分成更多、更小的 chunk。
+const BATCH_CHUNK_CHARS = 100000;
+function packIntoChunks(groups, metas) {
+  const chunks = [];
+  let curTexts = [], curMetas = [], curLen = 0;
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    if (curLen + g.length > BATCH_CHUNK_CHARS && curTexts.length) {
+      chunks.push({ texts: curTexts, metas: curMetas });
+      curTexts = []; curMetas = []; curLen = 0;
+    }
+    curTexts.push(g); if (metas) curMetas.push(metas[i]); curLen += g.length;
+  }
+  if (curTexts.length) chunks.push({ texts: curTexts, metas: curMetas });
+  return chunks;
 }
 
 // ── Main batch process runner ──
@@ -468,71 +489,80 @@ async function run() {
   console.log(`Files needing role classification: ${needRoles.length}`);
   
   if (needRoles.length) {
-    const CHUNK_SIZE = 40;
-    for (let k = 0; k < needRoles.length; k += CHUNK_SIZE) {
-      const chunk = needRoles.slice(k, k + CHUNK_SIZE);
-      const items = [];
-      const lines = [];
-      
-      chunk.forEach(f => {
-        const needIdxs = new Set();
-        f.roles.forEach((r, idx) => {
-          if (r === null) {
-            needIdxs.add(idx);
-            for (let j = Math.max(0, idx-2); j < idx; j++) if (f.roles[j] === 1) needIdxs.add(j);
-            for (let j = idx+1; j <= Math.min(f.allSents.length-1, idx+2); j++) if (f.roles[j] === 1) needIdxs.add(j);
-          }
-        });
-        if (!needIdxs.size) return;
-        const sorted = Array.from(needIdxs).sort((a,b)=>a-b);
-        const merged = [];
-        let start = sorted[0], end = sorted[0];
-        for (let x = 1; x < sorted.length; x++) {
-          if (sorted[x] === end + 1) end = sorted[x];
-          else { merged.push([start, end]); start = sorted[x]; end = sorted[x]; }
+    // 先彙整全部檔案的「不確定角色」項目，再依總字元數切 chunk（不是固定檔案數），
+    // 這樣不管某個 chunk 裡的檔案剛好有多少不確定句，輸出的 JSON 量都有上限可控
+    const items = []; // {fileIdx, sentIdx, label}
+    const groups = [];
+    const groupFileIdx = []; // 跟 groups 一一對應，讓每個 chunk 知道自己涵蓋哪些檔案
+    needRoles.forEach(f => {
+      const needIdxs = new Set();
+      f.roles.forEach((r, idx) => {
+        if (r === null) {
+          needIdxs.add(idx);
+          for (let j = Math.max(0, idx-2); j < idx; j++) if (f.roles[j] === 1) needIdxs.add(j);
+          for (let j = idx+1; j <= Math.min(f.allSents.length-1, idx+2); j++) if (f.roles[j] === 1) needIdxs.add(j);
         }
-        merged.push([start, end]);
-        
-        merged.forEach(([s,e], bi) => {
-          if (bi > 0) lines.push('...');
-          for (let idx = s; idx <= e; idx++) {
-            const label = `F${f.fileIdx}S${idx}`;
-            const tag = f.roles[idx]===1 ? '[管理層]' : f.roles[idx]===0 ? '[其他]' : '[?]';
-            if (f.roles[idx] === null) items.push({ fileIdx: f.fileIdx, sentIdx: idx, label });
-            lines.push(`${label} ${tag} ${f.allSents[idx]}`);
-          }
-        });
       });
-      
-      if (!items.length) continue;
-      
-      const curIdx = Math.floor(k/CHUNK_SIZE) + 1;
-      const totIdx = Math.ceil(needRoles.length/CHUNK_SIZE);
-      console.log(`Role classification progress: ${getProgressBar(curIdx, totIdx)} - Chunk ${curIdx}/${totIdx} (${items.length} items)...`);
-      try {
-        const CLASSIFY_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿中，不確定角色的句子與其前後文片段，每行格式為「編號 角色標記 句子內容」。
+      if (!needIdxs.size) return;
+      const sorted = Array.from(needIdxs).sort((a,b)=>a-b);
+      const merged = [];
+      let start = sorted[0], end = sorted[0];
+      for (let x = 1; x < sorted.length; x++) {
+        if (sorted[x] === end + 1) end = sorted[x];
+        else { merged.push([start, end]); start = sorted[x]; end = sorted[x]; }
+      }
+      merged.push([start, end]);
+
+      const lines = [];
+      merged.forEach(([s,e], bi) => {
+        if (bi > 0) lines.push('...');
+        for (let idx = s; idx <= e; idx++) {
+          const label = `F${f.fileIdx}S${idx}`;
+          const tag = f.roles[idx]===1 ? '[管理層]' : f.roles[idx]===0 ? '[其他]' : '[?]';
+          if (f.roles[idx] === null) items.push({ fileIdx: f.fileIdx, sentIdx: idx, label });
+          lines.push(`${label} ${tag} ${f.allSents[idx]}`);
+        }
+      });
+      groups.push(lines.join('\n'));
+      groupFileIdx.push(f.fileIdx);
+    });
+
+    if (items.length) {
+      const CLASSIFY_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿中，不確定角色的句子與其前後文片段，每行格式為「編號 角色標記 句子內容」。
 請針對每一個標記為 [?] 的句子，判斷該句是否為管理層本人發言：
 - 1 表示是管理層發言
 - 0 表示不是管理層發言
 請嚴格以 JSON 物件格式回傳，key 為該句編號（例如 "F3S57"），value 為 0 或 1，只需包含 [?] 的句子，不得有任何其他文字。範例：{"F3S57":1,"F3S61":0}`;
-        
-        const resultMap = await callGemini(CLASSIFY_PROMPT, lines.join('\n'));
-        const byFile = new Map();
-        chunk.forEach(f => byFile.set(f.fileIdx, f.roles));
-        
-        items.forEach(({fileIdx, sentIdx, label}) => {
-          if (label in resultMap && (resultMap[label] == 0 || resultMap[label] == 1)) {
-            byFile.get(fileIdx)[sentIdx] = Number(resultMap[label]);
-          }
-        });
-        chunk.forEach(f => f.aiUsed = true);
-      } catch (e) {
-        console.warn(`Role classification chunk failed: ${e.message}. Falling back to dictionary rules.`);
+
+      const chunks = packIntoChunks(groups, groupFileIdx);
+      const resultMap = {};
+      const okFileIdx = new Set(); // 只有「這個檔案所在的 chunk 真的成功」才算，不是「有被排進某個 chunk 就算」
+      for (let idx = 0; idx < chunks.length; idx++) {
+        console.log(`Role classification progress: ${getProgressBar(idx+1, chunks.length)} - Chunk ${idx+1}/${chunks.length}...`);
+        try {
+          // maxOutputTokens 拉高到 32768：這個請求的輸出量是「每個不確定角色一個 JSON 欄位」，
+          // 會隨 chunk 裡的不確定句數量而變多，舊版固定 8192 太容易被截斷
+          const data = await callGemini(CLASSIFY_PROMPT, chunks[idx].texts.join('\n\n'), 32768);
+          Object.assign(resultMap, data);
+          chunks[idx].metas.forEach(fi => okFileIdx.add(fi));
+        } catch (e) {
+          console.warn(`Role classification chunk ${idx+1}/${chunks.length} failed: ${e.message}. Those items fall back to dictionary rules.`);
+        }
+        if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
       }
-      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+
+      const byFile = new Map();
+      needRoles.forEach(f => byFile.set(f.fileIdx, f.roles));
+      items.forEach(({fileIdx, sentIdx, label}) => {
+        if (label in resultMap && (resultMap[label] == 0 || resultMap[label] == 1)) {
+          byFile.get(fileIdx)[sentIdx] = Number(resultMap[label]);
+        }
+      });
+      // 只有 chunk 真的成功回應的檔案才標記 aiUsed，chunk 整個失敗的檔案誠實顯示「字典」
+      needRoles.forEach(f => { if (okFileIdx.has(f.fileIdx)) f.aiUsed = true; });
     }
   }
-  
+
   // Resolve remaining roles
   records.forEach(r => {
     if (!r.empty) resolveRemainingRoles(r.roles);
@@ -550,38 +580,44 @@ async function run() {
   console.log(`Files needing Q&A start finder: ${needPhaseAI.length}`);
   
   if (needPhaseAI.length) {
-    const CHUNK_SIZE = 10;
-    for (let k = 0; k < needPhaseAI.length; k += CHUNK_SIZE) {
-      const chunk = needPhaseAI.slice(k, k + CHUNK_SIZE);
-      const lines = chunk.map(f => f.allSents.map((s,j) => `F${f.fileIdx}S${j} ${s}`).join('\n'));
-      
-      const curIdx = Math.floor(k/CHUNK_SIZE) + 1;
-      const totIdx = Math.ceil(needPhaseAI.length/CHUNK_SIZE);
-      console.log(`Q&A start finder progress: ${getProgressBar(curIdx, totIdx)} - Chunk ${curIdx}/${totIdx}...`);
-      try {
-        const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿的句子列表，每行格式為「編號 句子」，編號格式為 F<檔案序號>S<句子序號>，是全域唯一識別碼。
+    // 舊版把整份逐字稿的每一句都送出去，但轉場點不可能發生在前 QA_MIN_SENT 句（analyzePhases
+    // 本身就不檢查那個範圍），只送 QA_MIN_SENT 之後的句子，同時依總字元數（不是固定檔案數）切 chunk
+    const groups = needPhaseAI.map(f =>
+      f.allSents.slice(QA_MIN_SENT).map((s,j) => `F${f.fileIdx}S${QA_MIN_SENT+j} ${s}`).join('\n')
+    );
+    const chunks = packIntoChunks(groups, needPhaseAI.map(f => f.fileIdx));
+    const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是多份逐字稿的句子列表，每行格式為「編號 句子」，編號格式為 F<檔案序號>S<句子序號>，是全域唯一識別碼。
 請針對每一份檔案（依 F 後面的檔案序號分組），各自找出「從管理層報告，正式轉為開放問答（Q&A）」的第一句編號——也就是真正開始有人（主持人或投資人）在問問題、或管理層開始處理提問內容的第一句，
 而不是預告「等一下會有Q&A」這種還在報告階段的句子，也不是事後才提到「謝謝大家的提問」這種已經結束的句子。
 如果某份檔案完全找不到明確的問答轉折點，該檔案不用出現在回傳結果中。
 請嚴格以 JSON 物件格式回傳，key 為檔案序號（例如 "3"），value 為該檔案問答起始句的完整編號字串（例如 "F3S57"），不得有任何其他文字。範例：{"3":"F3S57","9":"F9S102"}`;
-        
-        const resultMap = await callGemini(QA_FINDER_PROMPT, lines.join('\n\n'));
-        chunk.forEach(f => {
-          f.aiUsed = true;
-          const label = resultMap[String(f.fileIdx)];
-          if (label) {
-            const m = /^F(\d+)S(\d+)$/.exec(label);
-            if (m && Number(m[1]) === f.fileIdx) {
-              const foundIdx = Number(m[2]);
-              for (let idx = foundIdx; idx < f.phases.length; idx++) f.phases[idx] = 1;
-            }
-          }
-        });
+
+    const resultMap = {};
+    const okFileIdx = new Set();
+    for (let idx = 0; idx < chunks.length; idx++) {
+      console.log(`Q&A start finder progress: ${getProgressBar(idx+1, chunks.length)} - Chunk ${idx+1}/${chunks.length}...`);
+      try {
+        const data = await callGemini(QA_FINDER_PROMPT, chunks[idx].texts.join('\n\n'));
+        Object.assign(resultMap, data);
+        chunks[idx].metas.forEach(fi => okFileIdx.add(fi));
       } catch (e) {
-        console.warn(`Q&A start chunk failed: ${e.message}. Using default dictionary boundaries.`);
+        console.warn(`Q&A start chunk ${idx+1}/${chunks.length} failed: ${e.message}. Using default dictionary boundaries for those files.`);
       }
-      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+      if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
     }
+
+    needPhaseAI.forEach(f => {
+      if (!okFileIdx.has(f.fileIdx)) return; // 這份檔案所在的 chunk 整個失敗，維持字典分段結果，不算 aiUsed
+      f.aiUsed = true;
+      const label = resultMap[String(f.fileIdx)];
+      if (label) {
+        const m = /^F(\d+)S(\d+)$/.exec(label);
+        if (m && Number(m[1]) === f.fileIdx) {
+          const foundIdx = Number(m[2]);
+          for (let idx = foundIdx; idx < f.phases.length; idx++) f.phases[idx] = 1;
+        }
+      }
+    });
   }
 
   // Phase 4: Collect metrics & local UNC
