@@ -364,15 +364,33 @@ function finalizeMetrics(allSents, isMarker, roles, phases) {
   return {Tone_P:calcTone(stats.P),Tone_Q:calcTone(stats.Q),Tone_T:calcTone(merged),counts:stats,details,uncIndices};
 }
 
-// ── Gemini API Client with global fail switch ──
-let aiFailedGlobally = false;
+// ── Gemini API Client ──
+// 註：舊版有一個「aiFailedGlobally」全域開關——只要任何一個 chunk 重試 4 次都失敗（例如短暫的
+// 429 頻率限制），就永久關閉整個 run 剩下所有檔案的 AI，只能全部 fallback 回字典。
+// 真實測試發現：單一檔案跑沒事，但 2000+ 份檔案的大批次會發出遠比單檔測試更多次的 chunk 請求，
+// 更容易撞到一次性的頻率限制，一旦撞到就把後面全部檔案的 AI 都跟著關掉，即使限制窗口早就過了。
+// 改成「只讓失敗的這個 chunk fallback 回字典，其他 chunk 繼續正常嘗試 AI」，不設永久關閉開關；
+// 遇到 429/額度限制時，優先解析 Google 回傳的建議重試秒數（RetryInfo.retryDelay 或訊息裡的
+// 「retry in Xs」），而不是用太短的固定指數退避去硬闖。
+function parseRetryDelaySeconds(errBody) {
+  try {
+    const parsed = JSON.parse(errBody);
+    const detail = parsed?.error?.details?.find(d => d['@type']?.includes('RetryInfo'));
+    if (detail?.retryDelay) {
+      const n = parseFloat(detail.retryDelay);
+      if (Number.isFinite(n)) return n;
+    }
+    const m = /retry in ([\d.]+)s/i.exec(parsed?.error?.message || errBody);
+    if (m) return parseFloat(m[1]);
+  } catch (e) {}
+  return null;
+}
 
 async function callGemini(systemPrompt, promptText) {
-  if (aiFailedGlobally) throw new Error("AI disabled globally due to previous quota limit or connection error.");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  
-  let delay = 1000;
-  for (let r = 0; r < 4; r++) {
+
+  let delay = 2000;
+  for (let r = 0; r < 5; r++) {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -387,12 +405,11 @@ async function callGemini(systemPrompt, promptText) {
       if (!res.ok) {
         const text = await res.text();
         if (res.status === 429 || res.status === 403 || text.includes("Quota exceeded") || text.includes("RESOURCE_EXHAUSTED")) {
-          if (r === 3) {
-            aiFailedGlobally = true;
-            console.warn("API quota limit reached. Disabling future AI requests and falling back to dictionary analysis.");
-          }
-          console.warn(`Gemini API rate limited (attempt ${r+1}), retrying after ${delay}ms...`);
-          await sleep(delay);
+          if (r === 4) throw new Error(`API error: ${res.status} - ${text}`);
+          const suggested = parseRetryDelaySeconds(text);
+          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          console.warn(`Gemini API rate limited (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`);
+          await sleep(waitMs);
           delay *= 2;
           continue;
         }
@@ -402,7 +419,7 @@ async function callGemini(systemPrompt, promptText) {
       const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       return JSON.parse(raw.replace(/```json|```/g, '').trim());
     } catch (e) {
-      if (r === 3) {
+      if (r === 4) {
         throw e;
       }
       console.warn(`Gemini API request failed (attempt ${r+1}), retrying after ${delay}ms...`, e.message);
@@ -450,10 +467,9 @@ async function run() {
   const needRoles = records.filter(r => !r.empty && r.roles.some(rl => rl === null));
   console.log(`Files needing role classification: ${needRoles.length}`);
   
-  if (needRoles.length && !aiFailedGlobally) {
-    const CHUNK_SIZE = 40; 
+  if (needRoles.length) {
+    const CHUNK_SIZE = 40;
     for (let k = 0; k < needRoles.length; k += CHUNK_SIZE) {
-      if (aiFailedGlobally) break;
       const chunk = needRoles.slice(k, k + CHUNK_SIZE);
       const items = [];
       const lines = [];
@@ -513,7 +529,7 @@ async function run() {
       } catch (e) {
         console.warn(`Role classification chunk failed: ${e.message}. Falling back to dictionary rules.`);
       }
-      await sleep(200); 
+      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
     }
   }
   
@@ -533,10 +549,9 @@ async function run() {
   });
   console.log(`Files needing Q&A start finder: ${needPhaseAI.length}`);
   
-  if (needPhaseAI.length && !aiFailedGlobally) {
+  if (needPhaseAI.length) {
     const CHUNK_SIZE = 10;
     for (let k = 0; k < needPhaseAI.length; k += CHUNK_SIZE) {
-      if (aiFailedGlobally) break;
       const chunk = needPhaseAI.slice(k, k + CHUNK_SIZE);
       const lines = chunk.map(f => f.allSents.map((s,j) => `F${f.fileIdx}S${j} ${s}`).join('\n'));
       
@@ -565,7 +580,7 @@ async function run() {
       } catch (e) {
         console.warn(`Q&A start chunk failed: ${e.message}. Using default dictionary boundaries.`);
       }
-      await sleep(200);
+      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
     }
   }
 
@@ -592,10 +607,9 @@ async function run() {
   console.log(`Uncertainty (UNC) sentences gathered: ${uncPool.length}`);
 
   // Phase 5: AI UNC Refinement
-  if (uncPool.length && !aiFailedGlobally) {
+  if (uncPool.length) {
     const CHUNK_SIZE = 100;
     for (let k = 0; k < uncPool.length; k += CHUNK_SIZE) {
-      if (aiFailedGlobally) break;
       const chunk = uncPool.slice(k, k + CHUNK_SIZE);
       const lines = chunk.map(it => `${it.label} ${it.sentence}`).join('\n');
       
@@ -627,7 +641,7 @@ async function run() {
       } catch (e) {
         console.warn(`UNC refining chunk failed: ${e.message}. Using default dictionary rules.`);
       }
-      await sleep(200);
+      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
     }
 
     // Re-calculate stats with refined UNC metrics
