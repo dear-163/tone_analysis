@@ -1098,13 +1098,11 @@ function renderQueue(){
   document.getElementById('q-count').textContent=queue.length;
   if(!queue.length){e.style.display='block';g.innerHTML='';return;}
   e.style.display='none';
-  const maxDisplay = 50;
-  const displayQueue = queue.slice(0, maxDisplay);
-  g.innerHTML=displayQueue.map((item,i)=>{
+  g.innerHTML=queue.map((item,i)=>{
     const cls=i===currentIdx?'active':item.status==='done'?'done':item.status==='error'?'error':'';
     const icon=item.status==='done'?`<span style="color:var(--pos)">✓</span>`:item.status==='error'?`<span style="color:var(--neg);font-size:9px">ERR</span>`:i===currentIdx?`<div style="width:10px;height:10px;border:2px solid var(--ac);border-top-color:transparent;border-radius:50%" class="spin"></div>`:`<span style="font-size:9px;color:var(--tx2)">WAIT</span>`;
     return `<div class="q-item ${cls}"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</span>${icon}</div>`;
-  }).join('') + (queue.length > maxDisplay ? `<div style="grid-column:1/-1;text-align:center;color:var(--tx2);font-size:10px;padding:8px;border-top:1px dashed var(--bd)">… 僅顯示前 ${maxDisplay} 筆，其餘 ${queue.length - maxDisplay} 筆正在背景處理 …</div>` : '');
+  }).join('');
   const done=queue.filter(i=>i.status==='done').length;
   document.getElementById('prog-wrap').style.display=queue.length?'block':'none';
   document.getElementById('prog-fill').style.width=(done/queue.length*100)+'%';
@@ -1298,9 +1296,7 @@ function renderResults(){
   document.getElementById('result-count').textContent=results.length;
   if(!results.length){empty.style.display='block';tbl.style.display='none';return;}
   empty.style.display='none'; tbl.style.display='table';
-  const maxDisplay = 100;
-  const displayResults = results.slice(0, maxDisplay);
-  body.innerHTML=displayResults.map((r,i)=>{
+  body.innerHTML=results.map((r,i)=>{
     const tp=r.counts.P.pos+r.counts.P.pos_u+r.counts.Q.pos+r.counts.Q.pos_u;
     const tn=r.counts.P.neg+r.counts.P.neg_u+r.counts.Q.neg+r.counts.Q.neg_u;
     const tl=r.counts.P.lit+r.counts.Q.lit;
@@ -1322,7 +1318,7 @@ function renderResults(){
       <td>${(r.aiUsed&&!r.aiError)?'<span class="b-ai-on">✓ AI</span>':'<span class="b-ai-off">字典</span>'}</td>
       <td><button class="view-btn" onclick="openModal(${i})">查看 →</button></td>
     </tr>`;
-  }).join('') + (results.length > maxDisplay ? `<tr><td colspan="12" style="text-align:center;color:var(--tx2);font-size:10px;padding:12px;border-top:1px dashed var(--bd)">… 僅顯示前 ${maxDisplay} 筆結果，您可以點擊左側「匯出報表」下載全部 ${results.length} 筆的完整 Excel/CSV 報表 …</td></tr>` : '');
+  }).join('');
   // stats
   document.getElementById('export-card').style.display='block';
   document.getElementById('stats-card').style.display='block';
