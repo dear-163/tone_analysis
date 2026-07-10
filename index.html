@@ -160,10 +160,8 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
             <button class="btn btn-ghost" onclick="toggleApiKey()" style="width:auto;padding:4px 8px;font-size:10px" id="api-toggle">顯示</button>
           </div>
           <select id="api-model" style="padding:4px 8px;font-size:11px;height:24px;border-radius:6px;width:100%;background:var(--s2);border:1px solid var(--bd);color:var(--tx)">
-            <option value="gemini-3.1-flash-lite" selected>Gemini 3.1 Flash Lite (推薦穩定高額度)</option>
+            <option value="gemini-flash-lite-latest" selected>Gemini Flash-Lite Latest (推薦穩定高額度)</option>
             <option value="gemini-flash-latest">Gemini Flash Latest</option>
-            <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           </select>
         </div>
         <span id="ai-status"></span>
@@ -1158,7 +1156,7 @@ async function runBatch(){
   document.getElementById('run-btn').disabled=true;
   setAiStatus('');
   const apiKey=document.getElementById('api-key').value.trim();
-  const model=document.getElementById('api-model').value || 'gemini-flash-latest'; // gemini-1.5-flash 已除役，fallback 用官方 latest 別名
+  const model=document.getElementById('api-model').value || 'gemini-flash-lite-latest'; // 只用官方 -latest 別名，不指定固定版本號，避免版本除役又要手動改
   const aiOn=apiKey.length>10;
   const RENDER_MIN_INTERVAL = 300;
   let lastRenderAt = 0;
@@ -1422,8 +1420,10 @@ if (savedKey) {
   keyInput.value = savedKey;
   keyInput.dispatchEvent(new Event('input'));
 }
-const savedModel = persistGet('tone_gemini_model', 'gemini-3.1-flash-lite');
-if (savedModel) {
+// 只認 -latest 別名：如果瀏覽器 localStorage 裡還留著舊版存的固定版本號（例如 gemini-3.1-flash-lite），
+// 就當作沒存過、改用預設值，避免版本被除役後又要每個人手動清一次快取
+const savedModel = persistGet('tone_gemini_model', 'gemini-flash-lite-latest');
+if (savedModel && savedModel.endsWith('-latest')) {
   document.getElementById('api-model').value = savedModel;
 }
 document.getElementById('api-model').addEventListener('change', function() {

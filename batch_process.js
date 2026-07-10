@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const apiKey = process.env.GEMINI_API_KEY || "";
-const model = "gemini-3.1-flash-lite"; // gemini-1.5-flash 已除役，改用目前仍可用、免費額度較高的模型
+const model = "gemini-flash-lite-latest"; // 只用官方 -latest 別名，不指定固定版本號，避免像 gemini-1.5-flash 那樣哪天被除役又要手動改
 const sourceDir = "/Users/changweihsiang/Desktop/全法說會稿";
 const summaryOut = "/Users/changweihsiang/Desktop/Tone_Summary.csv";
 const detailOut = "/Users/changweihsiang/Desktop/Quant/Tone_Detail.csv";

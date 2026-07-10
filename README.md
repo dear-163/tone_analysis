@@ -40,7 +40,7 @@
   ```
 * **操作方法**：
   1. 輸入您的 Gemini API Key。
-  2. 選擇分析模型（預設為 `gemini-3.1-flash-lite`；`gemini-1.5-flash` 已被 Google 除役，不要選它）。
+  2. 選擇分析模型（只提供官方 `-latest` 別名，預設為 `gemini-flash-lite-latest`，不指定固定版本號，避免像 `gemini-1.5-flash` 那樣哪天被 Google 除役）。
   3. 點擊上傳或直接拖放 `.txt` 逐字稿檔案至上傳區。
   4. 點擊「▶ 啟動批次分析」，即可透過實時進度條查看進展。
   5. 分析完畢後，點擊「匯出報表」下載 CSV 格式的統計摘要或逐句明細。
