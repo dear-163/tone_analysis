@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const apiKey = process.env.GEMINI_API_KEY || "";
-const model = "gemini-1.5-flash";
+const model = "gemini-3.1-flash-lite"; // gemini-1.5-flash 已除役，改用目前仍可用、免費額度較高的模型
 const sourceDir = "/Users/changweihsiang/Desktop/全法說會稿";
 const summaryOut = "/Users/changweihsiang/Desktop/Tone_Summary.csv";
 const detailOut = "/Users/changweihsiang/Desktop/Quant/Tone_Detail.csv";
@@ -241,8 +241,11 @@ function analyzeRoles(text) {
 }
 
 function resolveRemainingRoles(roles) {
+  // 註：曾嘗試「連續超過 5 句非管理層就強制翻成管理層」的規則，
+  // 但實測真實語料發現：Q&A 段分析師的長提問（含 **姓名-券商,Analyst** 標籤後的整段問題）
+  // 會被大量翻成管理層發言、污染 Tone_Q（例如為升：Q 段非管理層句從 89 句被砍到只剩 5 句），故不採用。
+  // 「整份檔案都找不到管理層」的極端情況由 finalizeMetrics 的救回機制處理即可。
   let ctx = 1;
-  let consecutiveZero = 0;
   for (let i = 0; i < roles.length; i++) {
     if (roles[i] === null) {
       if (i < 20 && ctx === 0) {
@@ -251,15 +254,6 @@ function resolveRemainingRoles(roles) {
       roles[i] = ctx;
     } else {
       ctx = roles[i];
-    }
-    if (roles[i] === 0) {
-      consecutiveZero++;
-      if (consecutiveZero > 5) {
-        roles[i] = 1;
-        ctx = 1;
-      }
-    } else {
-      consecutiveZero = 0;
     }
   }
 }
@@ -272,7 +266,12 @@ function analyzePhases(allSents, isMarker, roles) {
         qaStarted = true;
       } else if (idx >= QA_MIN_SENT) {
         const sTrim = s.trim();
-        const isPreAnnounce = /之前|準備|稍後|等一下|結束後|報告後|簡報後|簡報結束後|報告完後|結束之後|分為|分成/i.test(sTrim);
+        // 預告句過濾：句子含「延後詞」時通常是報告段在預告稍後才有 Q&A，不能當成轉場觸發。
+        // 但延後詞也可能只是順帶提到（例：「我們現在開始進行 Q&A，會將『之前』蒐集到的提問先回答」），
+        // 所以句中同時有「立即開始詞」時仍視為真正的轉場，不套用過濾
+        const hasDefer = /之前|準備|稍後|等一下|待會|結束後|報告後|簡報後|結束之後|分為|分成/i.test(sTrim);
+        const hasNow = /現在|正式|馬上|立刻|即刻|接(下來|著|續).{0,4}(是|進入|進行|開始)[^，。]{0,6}(Q\s*&?\s*A|問答|提問|意見交(換|流))|(一併|逐一|先)(進行)?回答|針對[^，。]{0,10}(提問|問題)[^，。]{0,8}回答/i.test(sTrim);
+        const isPreAnnounce = hasDefer && !hasNow;
         let triggered = false;
         if (!isPreAnnounce) {
           if (QA_START_PAT.test(sTrim) || QA_TEXT_PAT.test(s) || QA_LABEL_PAT.test(sTrim) || (QA_CONCEPT_PAT.test(s) && QA_TRANSITION_PAT.test(s))) {

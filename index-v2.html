@@ -159,7 +159,12 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
             <input type="password" id="api-key" placeholder="貼上 Gemini API Key..." style="flex:1;padding:5px 8px;font-size:11px;min-width:0">
             <button class="btn btn-ghost" onclick="toggleApiKey()" style="width:auto;padding:4px 8px;font-size:10px" id="api-toggle">顯示</button>
           </div>
-
+          <select id="api-model" style="padding:4px 8px;font-size:11px;height:24px;border-radius:6px;width:100%;background:var(--s2);border:1px solid var(--bd);color:var(--tx)">
+            <option value="gemini-3.1-flash-lite" selected>Gemini 3.1 Flash Lite (推薦穩定高額度)</option>
+            <option value="gemini-flash-latest">Gemini Flash Latest</option>
+            <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+          </select>
         </div>
         <span id="ai-status"></span>
       </div>
@@ -671,7 +676,8 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
         if (r < 3) { await sleep(delay); delay *= 1.8; }
       }
     }
-    if (!ok && lastErr) throw lastErr;
+    // 這個 chunk 徹底失敗也不中斷：其他 chunk 的結果照樣套用，
+    // 失敗 chunk 涵蓋的句子會因為 label 不在 resultMap 裡而被標進 errorFiles
   }
 
   const usedFiles = new Set(items.map(it => it.fileIdx));
@@ -682,16 +688,21 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     if (label in resultMap && (resultMap[label] == 0 || resultMap[label] == 1)) {
       byFile.get(fileIdx)[sentIdx] = Number(resultMap[label]);
     } else {
-      // AI 沒判斷到或漏掉的句子，我們不將其視為錯誤，而是保留為 null，後續會自動套用前後文 fallback 字典規則補上！
+      // AI 沒判斷到或漏掉的句子：保留 null 讓後續字典 fallback 補上，
+      // 但該檔案要誠實標記成 AI 失敗（畫面顯示「字典」而不是「✓ AI」）
       byFile.get(fileIdx)[sentIdx] = null;
+      errorFiles.add(fileIdx);
     }
   });
   return {usedFiles, errorFiles};
 }
 
 function resolveRemainingRoles(roles) {
+  // 註：曾嘗試「連續超過 5 句非管理層就強制翻成管理層」的規則，
+  // 但實測真實語料發現：Q&A 段分析師的長提問（含 **姓名-券商,Analyst** 標籤後的整段問題）
+  // 會被大量翻成管理層發言、污染 Tone_Q（例如為升：Q 段非管理層句從 89 句被砍到只剩 5 句），故不採用。
+  // 「整份檔案都找不到管理層」的極端情況由 finalizeMetrics 的救回機制處理即可。
   let ctx = 1;
-  let consecutiveZero = 0;
   for (let i = 0; i < roles.length; i++) {
     if (roles[i] === null) {
       if (i < 20 && ctx === 0) {
@@ -700,15 +711,6 @@ function resolveRemainingRoles(roles) {
       roles[i] = ctx;
     } else {
       ctx = roles[i];
-    }
-    if (roles[i] === 0) {
-      consecutiveZero++;
-      if (consecutiveZero > 5) {
-        roles[i] = 1;
-        ctx = 1;
-      }
-    } else {
-      consecutiveZero = 0;
     }
   }
 }
@@ -722,7 +724,17 @@ function analyzePhases(allSents, isMarker, roles) {
         qaStarted = true;
       } else if (idx >= QA_MIN_SENT) {
         const sTrim = s.trim();
-        const isPreAnnounce = /之前|準備|稍後|等一下|結束後|報告後|簡報後|簡報結束後|報告完後|結束之後|分為|分成/i.test(sTrim);
+        // 預告句過濾：句子含「延後詞」時通常是報告段在預告稍後才有 Q&A（例：「稍後如果各位有問題，可以在 Q&A 環節回覆」），
+        // 不能當成轉場觸發。但延後詞也可能只是順帶提到（例：「我們現在開始進行 Q&A，會將『之前』蒐集到的提問先回答」），
+        // 所以句中同時有「立即開始詞」時仍視為真正的轉場，不套用過濾
+        const hasDefer = /之前|準備|稍後|等一下|待會|結束後|報告後|簡報後|結束之後|分為|分成/i.test(sTrim);
+        // 立即開始詞：實測誤殺案例補進來的樣態——
+        // 「接下來是 Q&A 時間，稍後…」（上銀/榮成/華泰等，「是」後面要緊接 Q&A 概念詞，
+        //   避免「接下來的幾頁是財報…稍後 Q&A 討論」這種真預告被放行）、
+        // 「接下來我們就進入 Q&A」（致茂）、「接下來，針對之前收到的提問…一併回答」（榮運/迅杰）、
+        // 「我會逐一進行回答」（鉅祥）
+        const hasNow = /現在|正式|馬上|立刻|即刻|接(下來|著|續).{0,4}(是|進入|進行|開始)[^，。]{0,6}(Q\s*&?\s*A|問答|提問|意見交(換|流))|(一併|逐一|先)(進行)?回答|針對[^，。]{0,10}(提問|問題)[^，。]{0,8}回答/i.test(sTrim);
+        const isPreAnnounce = hasDefer && !hasNow;
         let triggered = false;
         if (!isPreAnnounce) {
           if (QA_START_PAT.test(sTrim) || QA_TEXT_PAT.test(s) || QA_LABEL_PAT.test(sTrim) || (QA_CONCEPT_PAT.test(s) && QA_TRANSITION_PAT.test(s))) {
@@ -860,7 +872,10 @@ const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是
 // 每次 API 請求打包的輸入文字上限（字元數）。gemini-2.5-flash context window 很大（可達百萬 token），
 // 這裡刻意抓保守值（避免單次 request 過大失敗），優先把多份檔案的內容塞進同一次請求，
 // 讓整批次的呼叫次數盡量壓到最少，而不是像舊版一樣一份檔案至少一次呼叫。
-const BATCH_CHUNK_CHARS = 200000;
+// 注意：角色分類的 maxOutputTokens 已配合 flash-lite 系列降到 8192，
+// 如果單一 chunk 塞太多 [?] 句，回應 JSON 會被截斷導致整個 chunk 解析失敗，
+// 所以 chunk 上限抓小一點（呼叫次數多一兩次，換取每次回應一定裝得下）
+const BATCH_CHUNK_CHARS = 100000;
 
 function packIntoChunks(groups, metas) {
   // groups: string[]，每個元素是一份檔案這個階段要送的文字區塊；metas（可選）為對應的附加資訊（例如 fileIdx），
@@ -931,10 +946,8 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
         if (r < 3) { await sleep(delay); delay *= 1.8; }
       }
     }
-    if (!ok) {
-      chunk.metas.forEach(fi => errorFiles.add(fi));
-      if (lastErr) throw lastErr;
-    }
+    // chunk 徹底失敗只標記該 chunk 涵蓋的檔案，不中斷：其他 chunk 的結果照樣套用
+    if (!ok) chunk.metas.forEach(fi => errorFiles.add(fi));
   }
 
   const usedFiles = new Set(fileEntries.map(f => f.fileIdx));
@@ -990,10 +1003,8 @@ async function batchRefine(items, model, apiKey, onProgress) {
         else { await sleep(delay); delay *= 1.8; }
       }
     }
-    if (!ok) {
-      hadError = true;
-      if (lastErr) throw lastErr;
-    }
+    // chunk 徹底失敗只記 hadError，不中斷也不丟棄其他 chunk 已成功的結果
+    if (!ok) hadError = true;
     if (i + CHUNK < items.length) await sleep(500);
   }
   return {resultMap, error: hadError};
@@ -1147,7 +1158,7 @@ async function runBatch(){
   document.getElementById('run-btn').disabled=true;
   setAiStatus('');
   const apiKey=document.getElementById('api-key').value.trim();
-  const model='gemini-1.5-flash';
+  const model=document.getElementById('api-model').value || 'gemini-flash-latest'; // gemini-1.5-flash 已除役，fallback 用官方 latest 別名
   const aiOn=apiKey.length>10;
   const RENDER_MIN_INTERVAL = 300;
   let lastRenderAt = 0;
@@ -1185,14 +1196,16 @@ async function runBatch(){
     if (needRoles.length) {
       updateProgUI(10, `[2/5] AI 角色判斷中...`);
       setAiStatus('running'); renderQueue();
+      // AI 失敗時 fallback 用字典補上，但 aiError 要如實標記——
+      // 畫面上該檔案顯示「字典」而不是「✓ AI」，使用者才知道哪些檔案其實沒吃到 AI
       try {
         const {usedFiles, errorFiles} = await batchClassifyRoles(needRoles.map(f=>({fileIdx:f.fileIdx, allSents:f.allSents, roles:f.roles})), model, apiKey, (curr, tot) => updateProgUI(10 + Math.round((curr / tot) * 40), `[2/5] AI 角色判斷中 (${curr}/${tot} 分組)`));
-        files.forEach(f => { if (usedFiles.has(f.fileIdx)) f.aiUsed = true; });
-        setAiStatus('done');
+        files.forEach(f => { if (usedFiles.has(f.fileIdx)) f.aiUsed = true; if (errorFiles.has(f.fileIdx)) f.aiError = true; });
+        setAiStatus(errorFiles.size ? 'error' : 'done');
       } catch (e) {
-        console.warn("AI 角色判斷失敗，自動啟動字典輔助判斷:", e);
-        files.forEach(f => { f.aiUsed = true; }); // 標記已使用（使用字典作為 fallback）
-        setAiStatus('done');
+        console.error("AI 角色判斷失敗，改用字典 fallback:", e);
+        needRoles.forEach(f => { f.aiUsed = true; f.aiError = true; });
+        setAiStatus('error', String(e.message||e).slice(0,200));
       }
     }
   }
@@ -1214,14 +1227,15 @@ async function runBatch(){
       const {resultIdx, usedFiles, errorFiles} = await batchFindQAStart(needPhaseAI.map(f=>({fileIdx:f.fileIdx, allSents:f.allSents})), model, apiKey, (curr, tot) => updateProgUI(50 + Math.round((curr / tot) * 25), `[3/5] AI 問答起點定位中 (${curr}/${tot} 分組)`));
       needPhaseAI.forEach(f => {
         if (usedFiles.has(f.fileIdx)) f.aiUsed = true;
+        if (errorFiles.has(f.fileIdx)) f.aiError = true;
         const foundIdx = resultIdx.get(f.fileIdx);
         if (foundIdx !== undefined) for (let i=foundIdx; i<f.phases.length; i++) f.phases[i]=1;
       });
-      setAiStatus('done');
+      setAiStatus(errorFiles.size ? 'error' : 'done');
     } catch (e) {
-      console.warn("AI 問答起點判斷失敗，自動採用字典預設分類:", e);
-      needPhaseAI.forEach(f => { f.aiUsed = true; }); // 標記已使用（使用字典作為 fallback）
-      setAiStatus('done');
+      console.error("AI 問答起點判斷失敗，維持字典分段結果:", e);
+      needPhaseAI.forEach(f => { f.aiUsed = true; f.aiError = true; });
+      setAiStatus('error', String(e.message||e).slice(0,200));
     }
   }
 
@@ -1238,38 +1252,34 @@ async function runBatch(){
   if (aiOn && uncPool.length) {
     updateProgUI(75, `[4/5] AI 不確定句精煉中...`);
     setAiStatus('running'); renderQueue();
-    try {
-      const {resultMap, error} = await batchRefine(uncPool.map(u=>({label:u.label, sentence:u.sentence})), model, apiKey, (curr, tot) => updateProgUI(75 + Math.round((curr / tot) * 15), `[4/5] AI 不確定句精煉中 (${curr}/${tot} 分組)`));
-      const byFile = new Map();
-      files.forEach(f => byFile.set(f.fileIdx, f));
-      const touchedFiles = new Set(uncPool.map(u=>u.fileIdx));
-      touchedFiles.forEach(fi => { const f = byFile.get(fi); if (f) f.aiUsed = true; });
-      uncPool.forEach(u => {
-        const f = byFile.get(u.fileIdx);
-        const v = resultMap[u.label];
-        if (v == 0 || v == 1 || v == 2) {
-          f.metrics.details[u.detailIdx].refine = Number(v);
-          f.metrics.details[u.detailIdx].aiRefined = true;
-        }
+    // batchRefine 內部已逐 chunk 容錯（失敗的 chunk 不會丟掉其他 chunk 的成功結果），
+    // 這裡拿到部分結果照樣套用，只把 error 如實反映到 aiError／狀態列
+    const {resultMap, error} = await batchRefine(uncPool.map(u=>({label:u.label, sentence:u.sentence})), model, apiKey, (curr, tot) => updateProgUI(75 + Math.round((curr / tot) * 15), `[4/5] AI 不確定句精煉中 (${curr}/${tot} 分組)`));
+    const byFile = new Map();
+    files.forEach(f => byFile.set(f.fileIdx, f));
+    const touchedFiles = new Set(uncPool.map(u=>u.fileIdx));
+    touchedFiles.forEach(fi => { const f = byFile.get(fi); if (f) { f.aiUsed = true; if (error) f.aiError = true; } });
+    uncPool.forEach(u => {
+      const f = byFile.get(u.fileIdx);
+      const v = resultMap[u.label];
+      if (v == 0 || v == 1 || v == 2) {
+        f.metrics.details[u.detailIdx].refine = Number(v);
+        f.metrics.details[u.detailIdx].aiRefined = true;
+      }
+    });
+    files.forEach(f => {
+      if (!f.metrics.uncIndices.length) return;
+      const nc = {P:{...f.metrics.counts.P,pos_u:0,neg_u:0}, Q:{...f.metrics.counts.Q,pos_u:0,neg_u:0}};
+      f.metrics.uncIndices.forEach(u => {
+        const v = f.metrics.details[u.detailIdx].refine;
+        if (v===1) nc[u.key].pos_u++;
+        else if (v===2) nc[u.key].neg_u++;
       });
-      files.forEach(f => {
-        if (!f.metrics.uncIndices.length) return;
-        const nc = {P:{...f.metrics.counts.P,pos_u:0,neg_u:0}, Q:{...f.metrics.counts.Q,pos_u:0,neg_u:0}};
-        f.metrics.uncIndices.forEach(u => {
-          const v = f.metrics.details[u.detailIdx].refine;
-          if (v===1) nc[u.key].pos_u++;
-          else if (v===2) nc[u.key].neg_u++;
-        });
-        const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
-        f.metrics.counts = nc;
-        f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
-      });
-      setAiStatus('done');
-    } catch (e) {
-      console.warn("AI 不確定句判斷失敗，跳過此步驟並維持原始中性分類:", e);
-      files.forEach(f => { f.aiUsed = true; }); // 標記已使用（使用字典作為 fallback）
-      setAiStatus('done');
-    }
+      const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
+      f.metrics.counts = nc;
+      f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
+    });
+    setAiStatus(error ? 'error' : 'done');
   }
 
   // ── 收尾：寫回 results/queue，畫面渲染 ───────────────────────────
@@ -1412,6 +1422,13 @@ if (savedKey) {
   keyInput.value = savedKey;
   keyInput.dispatchEvent(new Event('input'));
 }
+const savedModel = persistGet('tone_gemini_model', 'gemini-3.1-flash-lite');
+if (savedModel) {
+  document.getElementById('api-model').value = savedModel;
+}
+document.getElementById('api-model').addEventListener('change', function() {
+  persistSet('tone_gemini_model', this.value);
+});
 
 
 renderQueue();
