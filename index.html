@@ -960,21 +960,25 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
 // 批次 UNC 句子方向判斷：items = [{label, sentence}]（label 全域唯一，例如 "F3D5"）
 async function batchRefine(items, model, apiKey, onProgress) {
   if (!items.length) return {resultMap: {}, error: false};
-  const CHUNK = 400; // 舊版是「每份檔案各自 20 句一批」，改成跨檔案一起打包，大幅減少呼叫次數
+  // 舊版固定「每 400 句一批」，跟句子實際長度脫鉤：真實語料通常一份就有好幾萬句 UNC，
+  // 400 句/chunk 換算下來整批可能要 300+ 次請求，跟角色分類、問答起點三項加起來很容易逼近
+  // 免費額度上限（500 次/日）。改成跟其他兩個 AI 階段一致的「依總字元數」動態切 chunk，
+  // 每句平均長度遠短於角色分類的上下文區塊，同樣的字元預算可以塞進多好幾倍的句子，
+  // 大幅減少這個階段需要的請求次數。
+  const groups = items.map(it => `${it.label} ${it.sentence}`);
+  const chunks = packIntoChunks(groups);
   const resultMap = {};
-  const totChunks = Math.ceil(items.length / CHUNK);
   let hadError = false;
-  for (let i = 0; i < items.length; i += CHUNK) {
-    const chunkIdx = Math.floor(i / CHUNK);
-    if (onProgress) onProgress(chunkIdx + 1, totChunks);
-    const chunk = items.slice(i, i + CHUNK);
-    const msg = chunk.map(it => `${it.label} ${it.sentence}`).join('\n');
+  for (let idx = 0; idx < chunks.length; idx++) {
+    if (onProgress) onProgress(idx + 1, chunks.length);
+    const msg = chunks[idx].texts.join('\n');
     let delay = 1000, ok = false, lastErr = null;
     for (let r = 0; r < 4; r++) {
       try {
         const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:8000, responseMimeType:'application/json'}})
+          // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
+          body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:32768, responseMimeType:'application/json'}})
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
@@ -999,7 +1003,7 @@ async function batchRefine(items, model, apiKey, onProgress) {
     }
     // chunk 徹底失敗只記 hadError，不中斷也不丟棄其他 chunk 已成功的結果
     if (!ok) hadError = true;
-    if (i + CHUNK < items.length) await sleep(500);
+    if (idx < chunks.length - 1) await sleep(500);
   }
   return {resultMap, error: hadError};
 }

@@ -644,41 +644,44 @@ async function run() {
 
   // Phase 5: AI UNC Refinement
   if (uncPool.length) {
-    const CHUNK_SIZE = 100;
-    for (let k = 0; k < uncPool.length; k += CHUNK_SIZE) {
-      const chunk = uncPool.slice(k, k + CHUNK_SIZE);
-      const lines = chunk.map(it => `${it.label} ${it.sentence}`).join('\n');
-      
-      const curIdx = Math.floor(k/CHUNK_SIZE) + 1;
-      const totIdx = Math.ceil(uncPool.length/CHUNK_SIZE);
-      console.log(`UNC refining progress: ${getProgressBar(curIdx, totIdx)} - Chunk ${curIdx}/${totIdx} (${chunk.length} items)...`);
-      try {
-        const GMINI_PROMPT = `你是法人說明會逐字稿分析專家。以下是已被標記為 [不確定 (UNC)] 的句子列表，每行格式為「編號 句子內容」。
+    // 舊版固定「每 100 句一批」，跟句子實際長度脫鉤：真實語料一批可能就有十幾萬句 UNC，
+    // 100 句/chunk 換算下來這個階段就要 1000+ 次請求，加上角色分類、問答起點，很容易逼近
+    // 免費額度上限（500 次/日）。改成依總字元數動態切 chunk，跟其他兩個 AI 階段一致，
+    // 大幅減少這個階段需要的請求次數。
+    const groups = uncPool.map(it => `${it.label} ${it.sentence}`);
+    const chunks = packIntoChunks(groups, uncPool.map(it => it.fileIdx));
+    const GMINI_PROMPT = `你是法人說明會逐字稿分析專家。以下是已被標記為 [不確定 (UNC)] 的句子列表，每行格式為「編號 句子內容」。
 請你根據前後文脈絡（這裡只提供該句本身），判斷該句在情感傾向或語氣上，是否能被進一步細分為「偏向正向 (POS)」或「偏向負向 (NEG)」。
 分類標準：
 - 1 表示該不確定句偏向正向 (POS)
 - 2 表示該不確定句偏向負向 (NEG)
 - 0 表示該不確定句依然中立或無法判斷
 請嚴格以 JSON 物件格式回傳，key 為該句編號（例如 "F3D5"），value 為 0, 1 或 2，不得有任何其他文字。範例：{"F3D5":1,"F3D8":0,"F4D12":2}`;
-        
-        const resultMap = await callGemini(GMINI_PROMPT, lines);
-        const byFile = new Map();
-        records.forEach(r => { if (!r.empty) byFile.set(r.fileIdx, r); });
-        
-        chunk.forEach(u => {
-          const f = byFile.get(u.fileIdx);
-          const v = resultMap[u.label];
-          if (v == 0 || v == 1 || v == 2) {
-            f.metrics.details[u.detailIdx].refine = Number(v);
-            f.metrics.details[u.detailIdx].aiRefined = true;
-            f.aiUsed = true;
-          }
-        });
+
+    const resultMap = {};
+    for (let idx = 0; idx < chunks.length; idx++) {
+      console.log(`UNC refining progress: ${getProgressBar(idx+1, chunks.length)} - Chunk ${idx+1}/${chunks.length}...`);
+      try {
+        // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
+        const data = await callGemini(GMINI_PROMPT, chunks[idx].texts.join('\n'), 32768);
+        Object.assign(resultMap, data);
       } catch (e) {
-        console.warn(`UNC refining chunk failed: ${e.message}. Using default dictionary rules.`);
+        console.warn(`UNC refining chunk ${idx+1}/${chunks.length} failed: ${e.message}. Using default dictionary rules for those sentences.`);
       }
-      await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+      if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
     }
+
+    const byFile = new Map();
+    records.forEach(r => { if (!r.empty) byFile.set(r.fileIdx, r); });
+    uncPool.forEach(u => {
+      const f = byFile.get(u.fileIdx);
+      const v = resultMap[u.label];
+      if (v == 0 || v == 1 || v == 2) {
+        f.metrics.details[u.detailIdx].refine = Number(v);
+        f.metrics.details[u.detailIdx].aiRefined = true;
+        f.aiUsed = true;
+      }
+    });
 
     // Re-calculate stats with refined UNC metrics
     records.forEach(f => {
