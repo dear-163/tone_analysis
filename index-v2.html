@@ -644,7 +644,8 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
           body: JSON.stringify({
             contents: [{parts: [{text: chunk.texts.join('\n\n')}]}],
             systemInstruction: {parts: [{text: CLASSIFY_PROMPT}]},
-            generationConfig: {temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json'}
+            // 輸出量隨 chunk 內 [?] 句數增加，8192 太容易被截斷，拉高到 32768
+            generationConfig: {temperature: 0, maxOutputTokens: 32768, responseMimeType: 'application/json'}
           })
         });
         if (res.status === 429 || res.status >= 500) {
@@ -672,6 +673,9 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     }
     // 這個 chunk 徹底失敗也不中斷：其他 chunk 的結果照樣套用，
     // 失敗 chunk 涵蓋的句子會因為 label 不在 resultMap 裡而被標進 errorFiles
+    // chunk 之間固定間隔：實測 Google 用量儀表板顯示 TPM（每分鐘輸入 token 數）曾經超標，
+    // 光靠切小 chunk 不夠，還需要拉開送出間隔才不會短時間內塞爆
+    if (idx < chunks.length - 1) await sleep(2000);
   }
 
   const usedFiles = new Set(items.map(it => it.fileIdx));
@@ -869,7 +873,12 @@ const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是
 // 注意：角色分類的 maxOutputTokens 已配合 flash-lite 系列降到 8192，
 // 如果單一 chunk 塞太多 [?] 句，回應 JSON 會被截斷導致整個 chunk 解析失敗，
 // 所以 chunk 上限抓小一點（呼叫次數多一兩次，換取每次回應一定裝得下）
-const BATCH_CHUNK_CHARS = 100000;
+//
+// 實測發現：Google 用量儀表板顯示 TPM（每分鐘輸入 token 數）374.1K，遠超過 250K 上限——
+// 光靠壓低「每日請求數」（RPD）不夠，chunk 太大會讓「短時間內送出的 token 總量」爆掉。
+// 把上限從 100000 降到 60000，最大單一 chunk 字元數可以砍掉約 4 成，
+// 總請求數（拿真實 2429 份語料實測）只從 145 次增加到 245 次，仍在 500 次/日額度內綽綽有餘。
+const BATCH_CHUNK_CHARS = 60000;
 
 function packIntoChunks(groups, metas) {
   // groups: string[]，每個元素是一份檔案這個階段要送的文字區塊；metas（可選）為對應的附加資訊（例如 fileIdx），
@@ -942,6 +951,8 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
     }
     // chunk 徹底失敗只標記該 chunk 涵蓋的檔案，不中斷：其他 chunk 的結果照樣套用
     if (!ok) chunk.metas.forEach(fi => errorFiles.add(fi));
+    // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
+    if (idx < chunks.length - 1) await sleep(2000);
   }
 
   const usedFiles = new Set(fileEntries.map(f => f.fileIdx));
@@ -1003,7 +1014,8 @@ async function batchRefine(items, model, apiKey, onProgress) {
     }
     // chunk 徹底失敗只記 hadError，不中斷也不丟棄其他 chunk 已成功的結果
     if (!ok) hadError = true;
-    if (idx < chunks.length - 1) await sleep(500);
+    // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
+    if (idx < chunks.length - 1) await sleep(2000);
   }
   return {resultMap, error: hadError};
 }

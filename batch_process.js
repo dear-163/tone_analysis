@@ -434,7 +434,12 @@ async function callGemini(systemPrompt, promptText, maxOutputTokens = 8192) {
 // 被硬生生截斷，導致 JSON.parse 失敗，看起來像「AI 判讀失敗」。真實測試也證實：單一檔案沒事，
 // 2000+ 份檔案的大批次就會失敗，因為固定檔案數的 chunk 在檔案一多、平均內容量一大時完全兜不住。
 // 改成跟網頁版一致：依「總字元數」動態切 chunk，內容多的自動分成更多、更小的 chunk。
-const BATCH_CHUNK_CHARS = 100000;
+//
+// 實測發現：Google 用量儀表板顯示 TPM（每分鐘輸入 token 數）374.1K，遠超過 250K 上限——
+// 光靠壓低「每日請求數」（RPD）不夠，chunk 太大會讓「短時間內送出的 token 總量」爆掉。
+// 把上限從 100000 降到 60000，最大單一 chunk 字元數可以砍掉約 4 成，
+// 總請求數（拿真實 2429 份語料實測）只從 145 次增加到 245 次，仍在 500 次/日額度內綽綽有餘。
+const BATCH_CHUNK_CHARS = 60000;
 function packIntoChunks(groups, metas) {
   const chunks = [];
   let curTexts = [], curMetas = [], curLen = 0;
@@ -548,7 +553,7 @@ async function run() {
         } catch (e) {
           console.warn(`Role classification chunk ${idx+1}/${chunks.length} failed: ${e.message}. Those items fall back to dictionary rules.`);
         }
-        if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+        if (idx < chunks.length - 1) await sleep(2000); // 拉長 chunk 間隔，同時降低撞到 RPM（每分鐘請求數）與 TPM（每分鐘 token 數）限制的機率
       }
 
       const byFile = new Map();
@@ -603,7 +608,7 @@ async function run() {
       } catch (e) {
         console.warn(`Q&A start chunk ${idx+1}/${chunks.length} failed: ${e.message}. Using default dictionary boundaries for those files.`);
       }
-      if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+      if (idx < chunks.length - 1) await sleep(2000); // 拉長 chunk 間隔，同時降低撞到 RPM（每分鐘請求數）與 TPM（每分鐘 token 數）限制的機率
     }
 
     needPhaseAI.forEach(f => {
@@ -668,7 +673,7 @@ async function run() {
       } catch (e) {
         console.warn(`UNC refining chunk ${idx+1}/${chunks.length} failed: ${e.message}. Using default dictionary rules for those sentences.`);
       }
-      if (idx < chunks.length - 1) await sleep(1000); // 拉長 chunk 間隔，降低撞到免費額度 RPM（每分鐘請求數）限制的機率
+      if (idx < chunks.length - 1) await sleep(2000); // 拉長 chunk 間隔，同時降低撞到 RPM（每分鐘請求數）與 TPM（每分鐘 token 數）限制的機率
     }
 
     const byFile = new Map();
