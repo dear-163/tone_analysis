@@ -1157,8 +1157,9 @@ function clearAll(){queue=[];results=[];currentIdx=-1;renderQueue();renderResult
 // 整個批次分成幾個階段跑：先把所有檔案都做完純字典分析（不叫 AI），
 // 再把「需要 AI 幫忙」的項目整批彙整起來，一次性（或依大小切成盡量少的幾個請求）送給 Gemini，
 // 而不是像舊版一樣每份檔案各自呼叫 AI（幾千份檔案就是幾千次呼叫，免費額度一下就用完）。
-// 代價是：畫面上的完成勾勾會在「全部檔案的所有階段都跑完」才一次性打勾，
-// 不會像舊版一樣一份一份即時打勾，但這是把 API 呼叫次數壓到最低的必要取捨。
+// Pass 5（角色/問答段都確定後）就會把當下算出來的分數先寫進結果表格顯示出來，
+// 不用等 chunk 數最多、AI 失敗時重試最久的 Pass 6（UNC 精煉）整個跑完才看得到任何東西；
+// Pass 6 如果有結果，會直接更新同一批已顯示的資料，不會重複新增一份。
 async function runBatch(){
   if(processing||!queue.length) return;
   processing=true;
@@ -1256,10 +1257,20 @@ async function runBatch(){
     });
   });
 
+  // ── 提早揭露：這裡的分數已經是完整、有效的結果（字典＋角色/問答 AI，只差 UNC 精煉還沒套用），
+  // 先寫進 results 並畫出來，不要等 Pass 6（chunk 數最多、AI 失敗時重試最久）整個跑完才讓使用者看到任何東西。
+  // Pass 6 如果有結果，會在下面直接更新這裡已經顯示的同一筆資料，不會重複新增。
+  files.forEach(f => {
+    f.resultIdx = results.length;
+    results.push({name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError});
+    queue[f.qIdx].status='done';
+  });
+  updateProgUI(75, `[4/5] 已顯示初步結果，AI 不確定句精煉中...`);
+  renderQueue(); renderResults();
+
   // ── Pass 6：批次 UNC 方向 AI（整批只呼叫幾次）───────────────────
   if (aiOn && uncPool.length) {
-    updateProgUI(75, `[4/5] AI 不確定句精煉中...`);
-    setAiStatus('running'); renderQueue();
+    setAiStatus('running');
     // batchRefine 內部已逐 chunk 容錯（失敗的 chunk 不會丟掉其他 chunk 的成功結果），
     // 這裡拿到部分結果照樣套用，只把 error 如實反映到 aiError／狀態列
     const {resultMap, error} = await batchRefine(uncPool.map(u=>({label:u.label, sentence:u.sentence})), model, apiKey, (curr, tot) => updateProgUI(75 + Math.round((curr / tot) * 15), `[4/5] AI 不確定句精煉中 (${curr}/${tot} 分組)`));
@@ -1286,17 +1297,15 @@ async function runBatch(){
       const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
       f.metrics.counts = nc;
       f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
+      // 更新剛剛提早顯示過的那一筆，而不是重複新增
+      results[f.resultIdx] = {name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError};
     });
     setAiStatus(error ? 'error' : 'done');
+    updateProgUI(95, `[5/5] AI 精煉完成，更新結果中...`);
+    renderQueue(); renderResults();
   }
 
-  // ── 收尾：寫回 results/queue，畫面渲染 ───────────────────────────
-  files.forEach((f, idx) => {
-    results.push({name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError});
-    queue[f.qIdx].status='done';
-    updateProgUI(90 + Math.round((idx / files.length) * 10), `[5/5] 統計計算與匯出中 (${idx+1}/${files.length})`);
-  });
-
+  // ── 收尾 ───────────────────────────────────────────────────────
   processing=false; currentIdx=-1;
   renderQueue(); renderResults();
   document.getElementById('proc-badge').style.display='none';
