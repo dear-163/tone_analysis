@@ -1068,6 +1068,14 @@ function fetchWithTimeout(url, options, timeoutMs = GEMINI_TIMEOUT_MS) {
 // ── UI Helpers ─────────────────────────────────────────────────────
 function toneColor(v){return v>0.1?'var(--pos)':v<-0.1?'var(--neg)':'var(--unc)';}
 function toneBar(v,color){return `<span class="tbar"><span class="tbar-fill" style="width:${Math.min(100,Math.abs(v)*100)}%;background:${color}"></span></span>`;}
+// 三種 AI 徽章狀態：全部成功／部分成功（有 chunk 失敗，但至少有句子真的吃到 AI）／完全字典。
+// 「部分」原本會被誤標成「字典」，讓人以為整份完全沒吃到 AI，但明細裡其實看得到「▲/▼ 修正...(AI)」——
+// 用 details 裡有沒有任何一句 aiRefined:true 當作「至少有部分 AI 真的成功」的證據。
+function aiBadge(r){
+  if (r.aiUsed && !r.aiError) return '<span class="b-ai-on">✓ AI</span>';
+  if (r.aiUsed && r.aiError && r.details.some(d=>d.aiRefined)) return '<span class="b-ai-err" title="部分句子成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
+  return '<span class="b-ai-off">字典</span>';
+}
 
 function setAiStatus(s, errMsg){
   const el=document.getElementById('ai-status');
@@ -1384,7 +1392,7 @@ function renderResults(){
       <td class="mono" style="color:var(--unc)">${tu}</td>
       <td class="mono" style="color:var(--neu)">${tneu}</td>
       <td class="mono" style="color:var(--tx2)">${ts}</td>
-      <td>${(r.aiUsed&&!r.aiError)?'<span class="b-ai-on">✓ AI</span>':'<span class="b-ai-off">字典</span>'}</td>
+      <td>${aiBadge(r)}</td>
       <td><button class="view-btn" onclick="openModal(${i})">查看 →</button></td>
     </tr>`;
   }).join('');
@@ -1406,7 +1414,7 @@ const CAT_CLS={POS:'b-pos',NEG:'b-neg',LIT:'b-lit',UNC:'b-unc',NEUTRAL:'b-neu',N
 function openModal(idx){
   detailResult=results[idx];
   modalFilter='ALL';
-  document.getElementById('modal-title').textContent=detailResult.name;
+  document.getElementById('modal-title').innerHTML=`${detailResult.name} ${aiBadge(detailResult)}`;
   renderModal();
   document.getElementById('modal').style.display='flex';
 }
