@@ -653,8 +653,6 @@ async function run() {
     // 100 句/chunk 換算下來這個階段就要 1000+ 次請求，加上角色分類、問答起點，很容易逼近
     // 免費額度上限（500 次/日）。改成依總字元數動態切 chunk，跟其他兩個 AI 階段一致，
     // 大幅減少這個階段需要的請求次數。
-    const groups = uncPool.map(it => `${it.label} ${it.sentence}`);
-    const chunks = packIntoChunks(groups, uncPool.map(it => it.fileIdx));
     const GMINI_PROMPT = `你是法人說明會逐字稿分析專家。以下是已被標記為 [不確定 (UNC)] 的句子列表，每行格式為「編號 句子內容」。
 請你根據前後文脈絡（這裡只提供該句本身），判斷該句在情感傾向或語氣上，是否能被進一步細分為「偏向正向 (POS)」或「偏向負向 (NEG)」。
 分類標準：
@@ -663,17 +661,39 @@ async function run() {
 - 0 表示該不確定句依然中立或無法判斷
 請嚴格以 JSON 物件格式回傳，key 為該句編號（例如 "F3D5"），value 為 0, 1 或 2，不得有任何其他文字。範例：{"F3D5":1,"F3D8":0,"F4D12":2}`;
 
+    // UNC 句子的方向判斷原則上都要真的經過 AI 分析，不能因為暫時性的額度／頻率限制就輕易放棄回字典。
+    // 除了 callGemini 內部每個請求自己的重試，這裡再加一層「整輪重試」：一輪跑完後，把還沒拿到結果
+    // 的句子收集起來，等久一點（讓 RPM/TPM 這種滾動視窗有機會恢復），再重新打包送一次，
+    // 最多再重試 UNC_SWEEP_MAX 輪，才真的放棄、fallback 回字典。
+    const UNC_SWEEP_MAX = 3;
+    const UNC_SWEEP_COOLDOWN_MS = 15000;
     const resultMap = {};
-    for (let idx = 0; idx < chunks.length; idx++) {
-      console.log(`UNC refining progress: ${getProgressBar(idx+1, chunks.length)} - Chunk ${idx+1}/${chunks.length}...`);
-      try {
-        // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
-        const data = await callGemini(GMINI_PROMPT, chunks[idx].texts.join('\n'), 32768);
-        Object.assign(resultMap, data);
-      } catch (e) {
-        console.warn(`UNC refining chunk ${idx+1}/${chunks.length} failed: ${e.message}. Using default dictionary rules for those sentences.`);
+    let pending = uncPool;
+    for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length; sweep++) {
+      if (sweep > 0) {
+        console.warn(`UNC refining: 第 ${sweep} 輪整批重試，還有 ${pending.length} 句沒拿到 AI 結果，等 ${UNC_SWEEP_COOLDOWN_MS/1000} 秒讓額度視窗恢復...`);
+        await sleep(UNC_SWEEP_COOLDOWN_MS);
       }
-      if (idx < chunks.length - 1) await sleep(2000); // 拉長 chunk 間隔，同時降低撞到 RPM（每分鐘請求數）與 TPM（每分鐘 token 數）限制的機率
+      const groups = pending.map(it => `${it.label} ${it.sentence}`);
+      const chunks = packIntoChunks(groups, pending);
+      const stillMissing = [];
+      for (let idx = 0; idx < chunks.length; idx++) {
+        console.log(`UNC refining progress (sweep ${sweep+1}): ${getProgressBar(idx+1, chunks.length)} - Chunk ${idx+1}/${chunks.length}...`);
+        let chunkResultMap = {};
+        try {
+          // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
+          chunkResultMap = await callGemini(GMINI_PROMPT, chunks[idx].texts.join('\n'), 32768);
+          Object.assign(resultMap, chunkResultMap);
+        } catch (e) {
+          console.warn(`UNC refining chunk ${idx+1}/${chunks.length} failed: ${e.message}. Will retry in next sweep if any left.`);
+        }
+        chunks[idx].metas.forEach(it => { if (!(it.label in chunkResultMap)) stillMissing.push(it); });
+        if (idx < chunks.length - 1) await sleep(2000); // 拉長 chunk 間隔，同時降低撞到 RPM（每分鐘請求數）與 TPM（每分鐘 token 數）限制的機率
+      }
+      pending = stillMissing;
+    }
+    if (pending.length) {
+      console.warn(`UNC refining: ${UNC_SWEEP_MAX} 輪重試後仍有 ${pending.length} 句沒拿到 AI 結果，這些句子 fallback 回字典判斷。`);
     }
 
     const byFile = new Map();

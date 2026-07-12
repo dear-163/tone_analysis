@@ -993,65 +993,79 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
 }
 
 // 批次 UNC 句子方向判斷：items = [{label, sentence}]（label 全域唯一，例如 "F3D5"）
+// UNC 句子的方向判斷原則上都要真的經過 AI 分析，不能因為暫時性的額度／頻率限制就輕易放棄回字典。
+// 除了每個 chunk 內部的重試，這裡再加一層「整輪重試」：一輪跑完後，把還沒拿到結果的句子收集起來，
+// 等久一點（讓 RPM/TPM 這種滾動視窗有機會恢復），再重新打包送一次，最多再重試 SWEEP_MAX 輪，
+// 才真的放棄、fallback 回字典。
+const UNC_SWEEP_MAX = 3;
+const UNC_SWEEP_COOLDOWN_MS = 15000;
+
 async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
   if (!items.length) return {resultMap: {}, error: false};
-  // 舊版固定「每 400 句一批」，跟句子實際長度脫鉤：真實語料通常一份就有好幾萬句 UNC，
-  // 400 句/chunk 換算下來整批可能要 300+ 次請求，跟角色分類、問答起點三項加起來很容易逼近
-  // 免費額度上限（500 次/日）。改成跟其他兩個 AI 階段一致的「依總字元數」動態切 chunk，
-  // 每句平均長度遠短於角色分類的上下文區塊，同樣的字元預算可以塞進多好幾倍的句子，
-  // 大幅減少這個階段需要的請求次數。
-  const groups = items.map(it => `${it.label} ${it.sentence}`);
-  // metas 傳完整的 items（含 fileIdx/detailIdx/key），這樣每個 chunk 完成時，
-  // 呼叫方才知道「這個 chunk 涵蓋哪些檔案的哪些句子」，可以只更新這些檔案、不用等全部 chunk 跑完
-  const chunks = packIntoChunks(groups, items);
   const resultMap = {};
-  let hadError = false;
-  for (let idx = 0; idx < chunks.length; idx++) {
-    if (onProgress) onProgress(idx + 1, chunks.length);
-    const msg = chunks[idx].texts.join('\n');
-    let chunkResultMap = {};
-    let delay = 1000, ok = false, lastErr = null;
-    for (let r = 0; r < 4; r++) {
-      try {
-        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
-          body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:32768, responseMimeType:'application/json'}})
-        });
-        if (res.status === 429 || res.status >= 500) {
-          const errText = await res.text();
-          lastErr = new Error(`API error: ${res.status} - ${errText}`);
-          const suggested = parseRetryDelaySeconds(errText);
-          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
-          console.warn(`Gemini API batchRefine returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
-          await sleep(waitMs); delay *= 1.8; continue;
-        }
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error(`Gemini API batchRefine returned status ${res.status}:`, errText);
-          throw new Error(`API error: ${res.status} - ${errText}`);
-        }
-        const d = await res.json();
-        const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        chunkResultMap = JSON.parse(raw.replace(/```json|```/g, '').trim());
-        Object.assign(resultMap, chunkResultMap);
-        ok = true; break;
-      } catch (e) {
-        console.error('batchRefine error:', e);
-        lastErr = e;
-        if (r === 3) hadError = true;
-        else { await sleep(delay); delay *= 1.8; }
-      }
+  let pending = items;
+
+  for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length; sweep++) {
+    const isLastSweep = sweep === UNC_SWEEP_MAX;
+    if (sweep > 0) {
+      console.warn(`batchRefine: 第 ${sweep} 輪整批重試，還有 ${pending.length} 句沒拿到 AI 結果，等 ${UNC_SWEEP_COOLDOWN_MS/1000} 秒讓額度視窗恢復...`);
+      await sleep(UNC_SWEEP_COOLDOWN_MS);
     }
-    // chunk 徹底失敗只記 hadError，不中斷也不丟棄其他 chunk 已成功的結果
-    if (!ok) hadError = true;
-    // 這個 chunk 一結束（不管成功或失敗）就通知呼叫方，讓畫面可以立刻更新這個 chunk 涵蓋的檔案，
-    // 不用等剩下幾十個 chunk 都跑完才第一次看到 UNC 精煉後的分數
-    if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, !ok);
-    // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
-    if (idx < chunks.length - 1) await sleep(2000);
+    // 舊版固定「每 400 句一批」，跟句子實際長度脫鉤：真實語料通常一份就有好幾萬句 UNC，
+    // 400 句/chunk 換算下來整批可能要 300+ 次請求，跟角色分類、問答起點三項加起來很容易逼近
+    // 免費額度上限（500 次/日）。改成跟其他兩個 AI 階段一致的「依總字元數」動態切 chunk，
+    // 每句平均長度遠短於角色分類的上下文區塊，同樣的字元預算可以塞進多好幾倍的句子，
+    // 大幅減少這個階段需要的請求次數。
+    // metas 傳完整的 items（含 fileIdx/detailIdx/key），這樣每個 chunk 完成時，
+    // 呼叫方才知道「這個 chunk 涵蓋哪些檔案的哪些句子」，可以只更新這些檔案、不用等全部 chunk 跑完
+    const groups = pending.map(it => `${it.label} ${it.sentence}`);
+    const chunks = packIntoChunks(groups, pending);
+    const stillMissing = [];
+    for (let idx = 0; idx < chunks.length; idx++) {
+      if (onProgress) onProgress(idx + 1, chunks.length);
+      const msg = chunks[idx].texts.join('\n');
+      let chunkResultMap = {};
+      let delay = 1000, ok = false;
+      for (let r = 0; r < 4; r++) {
+        try {
+          const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
+            body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:32768, responseMimeType:'application/json'}})
+          });
+          if (res.status === 429 || res.status >= 500) {
+            const errText = await res.text();
+            const suggested = parseRetryDelaySeconds(errText);
+            const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+            console.warn(`Gemini API batchRefine returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
+            await sleep(waitMs); delay *= 1.8; continue;
+          }
+          if (!res.ok) {
+            const errText = await res.text();
+            console.error(`Gemini API batchRefine returned status ${res.status}:`, errText);
+            throw new Error(`API error: ${res.status} - ${errText}`);
+          }
+          const d = await res.json();
+          const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+          chunkResultMap = JSON.parse(raw.replace(/```json|```/g, '').trim());
+          Object.assign(resultMap, chunkResultMap);
+          ok = true; break;
+        } catch (e) {
+          console.error('batchRefine error:', e);
+          if (r < 3) { await sleep(delay); delay *= 1.8; }
+        }
+      }
+      const missing = chunks[idx].metas.filter(it => !(it.label in chunkResultMap));
+      // 只有「最後一輪還是失敗」才算真正的錯誤、通知呼叫方 fallback 回字典；
+      // 還有機會在下一輪重試的，先把這個 chunk 裡已經成功的部分套用上去，暫不標記失敗
+      if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, isLastSweep && missing.length > 0);
+      stillMissing.push(...missing);
+      // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
+      if (idx < chunks.length - 1) await sleep(2000);
+    }
+    pending = stillMissing;
   }
-  return {resultMap, error: hadError};
+  return {resultMap, error: pending.length > 0};
 }
 
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
