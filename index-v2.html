@@ -650,9 +650,11 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
-          console.warn(`Gemini API batchClassifyRoles returned ${res.status} (attempt ${r+1}), retrying...`, errText);
+          const suggested = parseRetryDelaySeconds(errText);
+          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          console.warn(`Gemini API batchClassifyRoles returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
           lastErr = new Error(`API error: ${res.status} - ${errText}`);
-          await sleep(delay); delay *= 1.8; continue;
+          await sleep(waitMs); delay *= 1.8; continue;
         }
         if (!res.ok) {
           const errText = await res.text();
@@ -880,6 +882,26 @@ const QA_FINDER_PROMPT = `你是法人說明會逐字稿分析專家。以下是
 // 總請求數（拿真實 2429 份語料實測）只從 145 次增加到 245 次，仍在 500 次/日額度內綽綽有餘。
 const BATCH_CHUNK_CHARS = 60000;
 
+// 從 429 回應內容解析 Google 建議的重試秒數（RetryInfo.retryDelay 或訊息裡的「retry in Xs」），
+// 而不是用固定的指數退避硬猜。實測發現：固定退避（4 次重試總共約 12 秒）常常不夠——
+// TPM/RPM 這種「每分鐘」的滾動視窗限制，可能需要等到接近一分鐘視窗過去才會真的解除，
+// 光靠 12 秒硬闖，剛好某個 chunk 撞到視窗還沒過去就會永久失敗，但下一個 chunk 因為晚幾秒送出、
+// 視窗剛好過了又會成功——這就是「同一批裡有的 chunk 有 AI、有的又變字典」的散布狀原因，
+// 不是額度整個用完那種一刀切的模式。
+function parseRetryDelaySeconds(errBody) {
+  try {
+    const parsed = JSON.parse(errBody);
+    const detail = parsed?.error?.details?.find(d => d['@type']?.includes('RetryInfo'));
+    if (detail?.retryDelay) {
+      const n = parseFloat(detail.retryDelay);
+      if (Number.isFinite(n)) return n;
+    }
+    const m = /retry in ([\d.]+)s/i.exec(parsed?.error?.message || errBody);
+    if (m) return parseFloat(m[1]);
+  } catch (e) {}
+  return null;
+}
+
 function packIntoChunks(groups, metas) {
   // groups: string[]，每個元素是一份檔案這個階段要送的文字區塊；metas（可選）為對應的附加資訊（例如 fileIdx），
   // 跟 groups 一一對應，回傳的每個 chunk 會一併帶出 texts 與 metas，讓呼叫方能知道這個 chunk 涵蓋哪些檔案
@@ -929,9 +951,11 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
-          console.warn(`Gemini API batchFindQAStart returned ${res.status} (attempt ${r+1}), retrying...`, errText);
+          const suggested = parseRetryDelaySeconds(errText);
+          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          console.warn(`Gemini API batchFindQAStart returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
           lastErr = new Error(`API error: ${res.status} - ${errText}`);
-          await sleep(delay); delay *= 1.8; continue;
+          await sleep(waitMs); delay *= 1.8; continue;
         }
         if (!res.ok) {
           const errText = await res.text();
@@ -997,7 +1021,10 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
           lastErr = new Error(`API error: ${res.status} - ${errText}`);
-          await sleep(delay); delay *= 1.8; continue;
+          const suggested = parseRetryDelaySeconds(errText);
+          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          console.warn(`Gemini API batchRefine returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
+          await sleep(waitMs); delay *= 1.8; continue;
         }
         if (!res.ok) {
           const errText = await res.text();
