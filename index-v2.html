@@ -1438,7 +1438,12 @@ function renderModal(){
       ...row.litWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-lit">§${w}</span>`),
       ...row.uncWords.split('，').filter(Boolean).map(w=>`<span class="chip cp-unc">?${w}</span>`),
     ].join('');
-    const refBadge=row.refine>0?`<span class="badge" style="background:rgba(124,58,237,.2);color:var(--a2)">${row.refine===1?'▲ 修正正向':'▼ 修正負向'}${row.aiRefined?' (AI)':''}</span>`:'';
+    // 字典猜測（uncRefine 關鍵字規則）跟 AI 真的確認過，視覺上要一眼就能分清楚，
+    // 不能只靠容易被忽略的「(AI)」小字尾巴——這正是先前造成使用者誤判的原因
+    const refBadge=row.refine>0?(row.aiRefined
+      ? `<span class="badge" style="background:rgba(124,58,237,.25);color:var(--a2);border:1px solid rgba(124,58,237,.5)">${row.refine===1?'▲ 正向':'▼ 負向'}・AI 已確認</span>`
+      : `<span class="badge" style="background:rgba(148,163,184,.15);color:var(--tx2);border:1px dashed var(--bd)">${row.refine===1?'▲ 正向':'▼ 負向'}・字典猜測（未套用 AI）</span>`
+    ):'';
     const catBadges=rowCats.map(c=>`<span class="badge ${CAT_CLS[c]}">${CAT_LABEL[c]}</span>`).join('');
     return `<div class="s-card${rowCats.includes('NEUTRAL')?' neutral':''}">
       <div class="s-meta">
