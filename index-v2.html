@@ -162,6 +162,7 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
         </div>
         <span id="ai-status"></span>
       </div>
+      <div id="quota-banner" style="display:none;background:rgba(239,68,68,.12);border:1px solid var(--neg);border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.5;color:var(--neg);margin:-4px 0 12px"></div>
 
       <!-- Exclusion Panel -->
       <div class="excl-panel" id="excl-panel">
@@ -437,6 +438,11 @@ const CAT_META = {
 
 // ── 狀態 ──────────────────────────────────────────────────────────
 let queue = [], results = [], exclusions = [...DEFAULT_EXCLUSIONS], processing = false, currentIdx = -1, detailResult = null, modalFilter = 'ALL';
+// 當偵測到 Google 回傳「每日額度 (RPD) 已用完」時設為 true：這種額度要等到太平洋時間午夜才會重置，
+// 同一次執行內不管重試幾次、等多久都不可能恢復，跟 RPM/TPM 那種幾秒~一分鐘內會恢復的暫時性限制不同。
+// 一旦確認是這種情況，後續所有 AI 呼叫直接跳過重試、快速 fallback 回字典，避免對 2000+ 份檔案的批次
+// 每個 chunk 都白白重試+等待數十秒到數分鐘，浪費使用者的時間。
+let dailyQuotaExhausted = false;
 
 // ── 排除判斷 ──────────────────────────────────────────────────────
 function isNeutral(sent) {
@@ -636,7 +642,7 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     const chunk = chunks[idx];
     if (onProgress) onProgress(idx + 1, chunks.length);
     let delay = 1000, ok = false, lastErr = null;
-    for (let r = 0; r < 4; r++) {
+    for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
       try {
         const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
           method: 'POST',
@@ -650,6 +656,13 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
+          if (res.status === 429 && isDailyQuotaError(errText)) {
+            console.warn('batchClassifyRoles: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
+            dailyQuotaExhausted = true;
+            showQuotaBanner();
+            lastErr = new Error(`API error: ${res.status} - ${errText}`);
+            break;
+          }
           const suggested = parseRetryDelaySeconds(errText);
           const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
           console.warn(`Gemini API batchClassifyRoles returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
@@ -676,8 +689,9 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     // 這個 chunk 徹底失敗也不中斷：其他 chunk 的結果照樣套用，
     // 失敗 chunk 涵蓋的句子會因為 label 不在 resultMap 裡而被標進 errorFiles
     // chunk 之間固定間隔：實測 Google 用量儀表板顯示 TPM（每分鐘輸入 token 數）曾經超標，
-    // 光靠切小 chunk 不夠，還需要拉開送出間隔才不會短時間內塞爆
-    if (idx < chunks.length - 1) await sleep(2000);
+    // 光靠切小 chunk 不夠，還需要拉開送出間隔才不會短時間內塞爆。
+    // 但如果已經確認整日額度用完，後面的 chunk 再等也沒用，直接跳過間隔快速結束這個階段
+    if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
   }
 
   const usedFiles = new Set(items.map(it => it.fileIdx));
@@ -902,6 +916,21 @@ function parseRetryDelaySeconds(errBody) {
   return null;
 }
 
+// 判斷 429 是否為「每日額度 (RPD) 用完」，而不是 RPM/TPM 那種每分鐘滾動視窗限制。
+// Google 的 QuotaFailure 錯誤會在 violations[].quotaId／quotaMetric 帶出被超過的額度種類，
+// 每日額度的 quotaId 固定包含 "PerDay"（例如 "GenerateRequestsPerDayPerProjectPerModel-FreeTier"），
+// 訊息文字裡通常也會直接寫 "per day"。只要命中，代表這次執行剩下的時間裡重試都不會成功，
+// 要等到太平洋時間午夜額度重置才行。
+function isDailyQuotaError(errBody) {
+  try {
+    const parsed = JSON.parse(errBody);
+    const violations = parsed?.error?.details?.find(d => d['@type']?.includes('QuotaFailure'))?.violations || [];
+    if (violations.some(v => /day/i.test(v.quotaId || '') || /day/i.test(v.quotaMetric || ''))) return true;
+    if (/per\s*day/i.test(parsed?.error?.message || errBody)) return true;
+  } catch (e) {}
+  return false;
+}
+
 function packIntoChunks(groups, metas) {
   // groups: string[]，每個元素是一份檔案這個階段要送的文字區塊；metas（可選）為對應的附加資訊（例如 fileIdx），
   // 跟 groups 一一對應，回傳的每個 chunk 會一併帶出 texts 與 metas，讓呼叫方能知道這個 chunk 涵蓋哪些檔案
@@ -938,7 +967,7 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
     const chunk = chunks[idx];
     if (onProgress) onProgress(idx + 1, chunks.length);
     let delay = 1000, ok = false, lastErr = null;
-    for (let r = 0; r < 4; r++) {
+    for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
       try {
         const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
           method: 'POST',
@@ -951,6 +980,13 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
+          if (res.status === 429 && isDailyQuotaError(errText)) {
+            console.warn('batchFindQAStart: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
+            dailyQuotaExhausted = true;
+            showQuotaBanner();
+            lastErr = new Error(`API error: ${res.status} - ${errText}`);
+            break;
+          }
           const suggested = parseRetryDelaySeconds(errText);
           const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
           console.warn(`Gemini API batchFindQAStart returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
@@ -975,8 +1011,9 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
     }
     // chunk 徹底失敗只標記該 chunk 涵蓋的檔案，不中斷：其他 chunk 的結果照樣套用
     if (!ok) chunk.metas.forEach(fi => errorFiles.add(fi));
-    // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
-    if (idx < chunks.length - 1) await sleep(2000);
+    // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）。
+    // 但如果已確認整日額度用完，後面再等也沒用，直接跳過快速結束這個階段
+    if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
   }
 
   const usedFiles = new Set(fileEntries.map(f => f.fileIdx));
@@ -1005,7 +1042,7 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
   const resultMap = {};
   let pending = items;
 
-  for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length; sweep++) {
+  for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length && !dailyQuotaExhausted; sweep++) {
     const isLastSweep = sweep === UNC_SWEEP_MAX;
     if (sweep > 0) {
       console.warn(`batchRefine: 第 ${sweep} 輪整批重試，還有 ${pending.length} 句沒拿到 AI 結果，等 ${UNC_SWEEP_COOLDOWN_MS/1000} 秒讓額度視窗恢復...`);
@@ -1026,7 +1063,7 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
       const msg = chunks[idx].texts.join('\n');
       let chunkResultMap = {};
       let delay = 1000, ok = false;
-      for (let r = 0; r < 4; r++) {
+      for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
         try {
           const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1035,6 +1072,12 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
           });
           if (res.status === 429 || res.status >= 500) {
             const errText = await res.text();
+            if (res.status === 429 && isDailyQuotaError(errText)) {
+              console.warn('batchRefine: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
+              dailyQuotaExhausted = true;
+              showQuotaBanner();
+              break;
+            }
             const suggested = parseRetryDelaySeconds(errText);
             const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
             console.warn(`Gemini API batchRefine returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
@@ -1057,11 +1100,13 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
       }
       const missing = chunks[idx].metas.filter(it => !(it.label in chunkResultMap));
       // 只有「最後一輪還是失敗」才算真正的錯誤、通知呼叫方 fallback 回字典；
-      // 還有機會在下一輪重試的，先把這個 chunk 裡已經成功的部分套用上去，暫不標記失敗
-      if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, isLastSweep && missing.length > 0);
+      // 還有機會在下一輪重試的，先把這個 chunk 裡已經成功的部分套用上去，暫不標記失敗。
+      // 已確認整日額度用完時，即使還沒到 UNC_SWEEP_MAX，之後也不會再重試了，等同真正的最後一輪
+      if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, (isLastSweep || dailyQuotaExhausted) && missing.length > 0);
       stillMissing.push(...missing);
-      // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）
-      if (idx < chunks.length - 1) await sleep(2000);
+      // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）。
+      // 但如果已確認整日額度用完，後面再等也沒用，直接跳過快速結束這個階段
+      if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
     }
     pending = stillMissing;
   }
@@ -1089,6 +1134,17 @@ function aiBadge(r){
   if (r.aiUsed && !r.aiError) return '<span class="b-ai-on">✓ AI</span>';
   if (r.aiUsed && r.aiError && r.details.some(d=>d.aiRefined)) return '<span class="b-ai-err" title="部分句子成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
   return '<span class="b-ai-off">字典</span>';
+}
+
+// 每日額度 (RPD) 用完的橫幅：跟 setAiStatus 分開顯示，因為 setAiStatus 會被後續各階段的
+// running/done 狀態不斷覆蓋，若共用同一個位置，這則重要訊息一閃就被蓋掉，使用者根本來不及看到
+function showQuotaBanner(){
+  const el = document.getElementById('quota-banner');
+  el.style.display = 'block';
+  el.textContent = '⚠ 今日 Gemini API 每日請求額度 (RPD) 已用完，本次執行剩餘的不確定句將直接使用字典判斷、不再嘗試 AI。額度會在太平洋時間午夜重置，請等重置後再重新執行以套用 AI 分析。';
+}
+function hideQuotaBanner(){
+  document.getElementById('quota-banner').style.display = 'none';
 }
 
 function setAiStatus(s, errMsg){
@@ -1222,6 +1278,8 @@ async function runBatch(){
   document.getElementById('proc-badge').style.display='flex';
   document.getElementById('run-btn').disabled=true;
   setAiStatus('');
+  dailyQuotaExhausted = false;
+  hideQuotaBanner();
   const apiKey=document.getElementById('api-key').value.trim();
   const model='gemini-flash-lite-latest'; // 固定用官方 -latest 別名，不開放使用者選擇，避免選到已除役或額度低的版本
   const aiOn=apiKey.length>10;
