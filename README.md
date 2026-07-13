@@ -240,6 +240,14 @@ function uncRefine(sent) {
 > * 畫面上會出現一則持續顯示的警告橫幅（「今日 Gemini API 每日請求額度 (RPD) 已用完...」），跟原本會被後續階段狀態覆蓋掉的 `ai-status` 分開顯示，讓使用者能明確知道「這不是程式壞掉，是額度真的用完了，要等重置」，而不是誤以為又是某種隱藏的 bug。
 > * 每次按下「開始分析」都會重新把旗標歸零，不會影響下一次全新的執行。
 
+> **修正：`onChunkDone` 誤把「chunk 有句子失敗」當成「chunk 整批失敗」**：UNC 精煉每個 chunk 通常橫跨多份檔案、多個句子，`chunkFailed`（見上方「整輪重試」）是整個 chunk 層級的旗標——只要 chunk 裡有任何一句在最後一輪仍拿不到結果就是 `true`。舊版程式碼一看到 `chunkFailed` 就直接把這個 chunk 涵蓋的**所有**句子都標記失敗、丟棄結果，即使 `chunkResultMap` 裡其實已經包含了同一個 chunk 內其他句子的正確 AI 判斷值——等於把明明成功拿到的 AI 結果也一起當失敗處理掉。現在改成逐句判斷：每一句先看自己的 label 有沒有出現在 `chunkResultMap` 裡，有就套用、標記 `aiRefined`；沒有的話才依 `chunkFailed` 決定要不要算這一句真正失敗。
+
+> **新增 `aiAnySuccess`，取代範圍過窄的 `details.some(d=>d.aiRefined)`**：三態徽章原本用「明細裡有沒有任何一句 `aiRefined:true`」來判斷「部分 AI」，但這個欄位**只有 UNC 精煉階段會設**——如果一份檔案是角色分類或問答起點判斷這兩個階段部分成功、部分失敗（跟 UNC 精煉完全無關，甚至這份檔案可能根本沒有 UNC 句子），畫面上仍然會顯示「字典」，即使這份檔案其實真的吃到了一部分 AI 判斷。改成三個 AI 階段（角色分類／問答起點／UNC 精煉）只要對某份檔案有任一次真正成功，就設定該檔案的 `aiAnySuccess = true`，`aiBadge()` 改讀這個涵蓋全部階段的旗標，「部分 AI」判斷不再只看得到 UNC 這一個階段。
+
+> **`clearQueue()`／`clearAll()` 加上 `processing` 守衛**：這兩個函式原本沒有檢查是否正在批次執行中，如果使用者在 `runBatch()` 跑到一半時按下「清除佇列」或「全部清除」，`queue`／`results` 陣列會被立刻換成新的空陣列，但 `runBatch()` 內部迴圈仍持著跑批次開始時就算好的索引（`pending[k]`、`queue[f.qIdx]` 等）繼續存取，下一次存取就會拿到 `undefined` 而整個批次連帶炸掉、卡死。現在這兩個函式在 `processing===true` 時直接不做任何事。
+
+> **`runBatch()` 加上 `try/finally`**：六個 Pass 中如果有任何一個拋出沒被內部 try/catch 接住的例外（原本各 Pass 各自有自己的 try/catch，但仍可能有意料之外的漏網例外），函式會直接中斷在半途，`processing` 永遠卡在 `true`、「開始分析」按鈕永遠停用、進度徽章永遠顯示執行中，使用者只能重新整理整個頁面才能再跑一次。現在把收尾（重設 `processing`、重畫畫面、恢復按鈕）移進 `finally` 區塊，不管中途是否拋出例外都保證會執行。
+
 ---
 
 ### 7. Tone 分數計算公式

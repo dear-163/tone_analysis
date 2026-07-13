@@ -847,7 +847,7 @@ function finalizeMetrics(allSents, isMarker, roles, phases) {
 
 function empty() {
   const s={pos:0,pos_u:0,neg:0,neg_u:0,lit:0,unc:0,total:0,neutral:0};
-  return {Tone_P:0,Tone_Q:0,Tone_T:0,counts:{P:{...s},Q:{...s}},details:[],uncIndices:[],aiUsed:false,aiError:false};
+  return {Tone_P:0,Tone_Q:0,Tone_T:0,counts:{P:{...s},Q:{...s}},details:[],uncIndices:[],aiUsed:false,aiError:false,aiAnySuccess:false};
 }
 
 // ── Gemini AI ──────────────────────────────────────────────────────
@@ -1127,12 +1127,15 @@ function fetchWithTimeout(url, options, timeoutMs = GEMINI_TIMEOUT_MS) {
 // ── UI Helpers ─────────────────────────────────────────────────────
 function toneColor(v){return v>0.1?'var(--pos)':v<-0.1?'var(--neg)':'var(--unc)';}
 function toneBar(v,color){return `<span class="tbar"><span class="tbar-fill" style="width:${Math.min(100,Math.abs(v)*100)}%;background:${color}"></span></span>`;}
-// 三種 AI 徽章狀態：全部成功／部分成功（有 chunk 失敗，但至少有句子真的吃到 AI）／完全字典。
+// 三種 AI 徽章狀態：全部成功／部分成功（有一部分失敗，但至少有一部分真的吃到 AI）／完全字典。
 // 「部分」原本會被誤標成「字典」，讓人以為整份完全沒吃到 AI，但明細裡其實看得到「▲/▼ 修正...(AI)」——
-// 用 details 裡有沒有任何一句 aiRefined:true 當作「至少有部分 AI 真的成功」的證據。
+// 用 aiAnySuccess 當作「至少有部分 AI 真的成功」的證據。
+// 注意：aiAnySuccess 涵蓋角色分類／問答起點／UNC 精煉三個階段，只要任一階段對這份檔案有實際成功套用，
+// 就會是 true；不能只看 details 裡有沒有 aiRefined:true，那個欄位只有 UNC 精煉會設，
+// 角色分類或問答起點就算成功也不會反映在任何一句 detail 上，會被誤判成「字典」。
 function aiBadge(r){
   if (r.aiUsed && !r.aiError) return '<span class="b-ai-on">✓ AI</span>';
-  if (r.aiUsed && r.aiError && r.details.some(d=>d.aiRefined)) return '<span class="b-ai-err" title="部分句子成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
+  if (r.aiUsed && r.aiError && r.aiAnySuccess) return '<span class="b-ai-err" title="部分句子/階段成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
   return '<span class="b-ai-off">字典</span>';
 }
 
@@ -1262,8 +1265,11 @@ function addTestSample(){
   queue.push({name:'測試樣本',type:'text',content:'各位投資先進，大家午安。歡迎參加本次法人說明會。管理層表示，公司今年業績成長顯著，獲利創歷史新高。分析師詢問風險問題。董事長回應，我們有充分準備應對不確定性。謝謝各位的聆聽，謝謝。',status:'pending'});
   renderQueue();
 }
-function clearQueue(){queue=[];renderQueue();}
-function clearAll(){queue=[];results=[];currentIdx=-1;renderQueue();renderResults();}
+// runBatch() 執行中會用索引（pending[k]、queue[f.qIdx] 等）持續存取 queue/results，
+// 這裡如果讓使用者把陣列整個換成新的空陣列，正在跑的迴圈下一次存取就會拿到 undefined 而炸掉。
+// 批次跑到一半時直接擋掉，不做任何清空
+function clearQueue(){ if(processing) return; queue=[];renderQueue(); }
+function clearAll(){ if(processing) return; queue=[];results=[];currentIdx=-1;renderQueue();renderResults(); }
 
 // ── Run ────────────────────────────────────────────────────────────
 // 整個批次分成幾個階段跑：先把所有檔案都做完純字典分析（不叫 AI），
@@ -1280,6 +1286,9 @@ async function runBatch(){
   setAiStatus('');
   dailyQuotaExhausted = false;
   hideQuotaBanner();
+  // 六個 Pass 中有任何一個拋出沒被內部 try/catch 接住的例外，都要確保 processing 被重設、
+  // 按鈕恢復可按——否則 processing 卡在 true，使用者只能重新整理整個頁面才能再跑一次
+  try {
   const apiKey=document.getElementById('api-key').value.trim();
   const model='gemini-flash-lite-latest'; // 固定用官方 -latest 別名，不開放使用者選擇，避免選到已除役或額度低的版本
   const aiOn=apiKey.length>10;
@@ -1307,7 +1316,7 @@ async function runBatch(){
       } else text=queue[i].content;
       const local = analyzeRoles(text);
       if (!local) { results.push({name:queue[i].name,...empty()}); queue[i].status='done'; continue; } // 空白/無有效句內容，視為合法的全零結果，不算錯誤
-      files.push({qIdx:i, fileIdx:k, name:queue[i].name, allSents:local.allSents, isMarker:local.isMarker, roles:local.roles, aiUsed:false, aiError:false});
+      files.push({qIdx:i, fileIdx:k, name:queue[i].name, allSents:local.allSents, isMarker:local.isMarker, roles:local.roles, aiUsed:false, aiError:false, aiAnySuccess:false});
     } catch(e) { queue[i].status='error'; }
     if (shouldRender) await sleep(0);
   }
@@ -1323,7 +1332,11 @@ async function runBatch(){
       // 畫面上該檔案顯示「字典」而不是「✓ AI」，使用者才知道哪些檔案其實沒吃到 AI
       try {
         const {usedFiles, errorFiles} = await batchClassifyRoles(needRoles.map(f=>({fileIdx:f.fileIdx, allSents:f.allSents, roles:f.roles})), model, apiKey, (curr, tot) => updateProgUI(10 + Math.round((curr / tot) * 40), `[2/5] AI 角色判斷中 (${curr}/${tot} 分組)`));
-        files.forEach(f => { if (usedFiles.has(f.fileIdx)) f.aiUsed = true; if (errorFiles.has(f.fileIdx)) f.aiError = true; });
+        files.forEach(f => {
+          if (usedFiles.has(f.fileIdx)) f.aiUsed = true;
+          if (errorFiles.has(f.fileIdx)) f.aiError = true;
+          else if (usedFiles.has(f.fileIdx)) f.aiAnySuccess = true; // 有送出、且沒被記到失敗，代表這份檔案的角色判斷確實吃到 AI
+        });
         setAiStatus(errorFiles.size ? 'error' : 'done');
       } catch (e) {
         console.error("AI 角色判斷失敗，改用字典 fallback:", e);
@@ -1351,6 +1364,7 @@ async function runBatch(){
       needPhaseAI.forEach(f => {
         if (usedFiles.has(f.fileIdx)) f.aiUsed = true;
         if (errorFiles.has(f.fileIdx)) f.aiError = true;
+        else if (usedFiles.has(f.fileIdx)) f.aiAnySuccess = true; // 請求成功（找不到轉折點也算合法結果），不是失敗
         const foundIdx = resultIdx.get(f.fileIdx);
         if (foundIdx !== undefined) for (let i=foundIdx; i<f.phases.length; i++) f.phases[i]=1;
       });
@@ -1376,7 +1390,7 @@ async function runBatch(){
   // Pass 6 如果有結果，會在下面直接更新這裡已經顯示的同一筆資料，不會重複新增。
   files.forEach(f => {
     f.resultIdx = results.length;
-    results.push({name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError});
+    results.push({name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError, aiAnySuccess:f.aiAnySuccess});
     queue[f.qIdx].status='done';
   });
   updateProgUI(75, `[4/5] 已顯示初步結果，AI 不確定句精煉中...`);
@@ -1400,11 +1414,16 @@ async function runBatch(){
       const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
       f.metrics.counts = nc;
       f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
-      results[f.resultIdx] = {name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError};
+      results[f.resultIdx] = {name:f.name, ...f.metrics, aiUsed:f.aiUsed, aiError:f.aiError, aiAnySuccess:f.aiAnySuccess};
     }
 
     let hadAnyError = false;
-    // chunk 一結束（不管成功或失敗）就套用、重算、重畫，不用等剩下幾十個 chunk 都跑完
+    // chunk 一結束（不管成功或失敗）就套用、重算、重畫，不用等剩下幾十個 chunk 都跑完。
+    // 注意：chunkFailed 是「這個 chunk 裡有沒有任何一句在最後一輪仍拿不到結果」的整批旗標，
+    // 但一個 chunk 通常橫跨多份檔案、多個句子，裡面可能大部分句子其實有拿到結果——
+    // 之前直接用這個旗標當「這個 chunk 的每一句都失敗」來處理，會把已經成功、有真正 AI
+    // 判斷值的句子也一併丟棄、標成失敗，等於白白浪費掉本來就正確拿到的 AI 結果。
+    // 改成逐句判斷：每一句先看自己有沒有拿到有效值，沒有才依 chunkFailed 決定是否算數真正失敗
     const onChunkDone = (chunkItems, chunkResultMap, chunkFailed) => {
       const affected = new Set();
       chunkItems.forEach(u => {
@@ -1412,11 +1431,14 @@ async function runBatch(){
         if (!f) return;
         f.aiUsed = true;
         affected.add(u.fileIdx);
-        if (chunkFailed) { f.aiError = true; hadAnyError = true; return; }
         const v = chunkResultMap[u.label];
         if (v == 0 || v == 1 || v == 2) {
           f.metrics.details[u.detailIdx].refine = Number(v);
           f.metrics.details[u.detailIdx].aiRefined = true;
+          f.aiAnySuccess = true;
+        } else if (chunkFailed) {
+          // 這一句在最後一輪依然沒拿到結果，才是這一句真正的失敗
+          f.aiError = true; hadAnyError = true;
         }
       });
       affected.forEach(fi => recalcAndUpdate(byFile.get(fi)));
@@ -1429,12 +1451,13 @@ async function runBatch(){
     setAiStatus((error || hadAnyError) ? 'error' : 'done');
   }
 
-  // ── 收尾 ───────────────────────────────────────────────────────
-  processing=false; currentIdx=-1;
-  renderQueue(); renderResults();
-  document.getElementById('proc-badge').style.display='none';
-  document.getElementById('run-btn').disabled=false;
-  renderQueue();
+  } finally {
+    // ── 收尾（不管中途是否拋出例外，都一定會執行）────────────────
+    processing=false; currentIdx=-1;
+    renderQueue(); renderResults();
+    document.getElementById('proc-badge').style.display='none';
+    document.getElementById('run-btn').disabled=false;
+  }
 }
 
 // ── Results Table ──────────────────────────────────────────────────
