@@ -134,8 +134,24 @@ function isNeutral(sent) {
   return false;
 }
 
+// 否定詞處理與例外複合詞清單，跟網頁版 (index.html) 完全一致——理由與實測數字見網頁版註解與 README
+const NEGATION_MARKERS = /(不|沒有|沒|無|未|尚未|未曾|難以|無法|並未|並無)$/;
+const NEGATION_FALSE_POSITIVES = new Set(['不動產']);
 function matches(sent, dict) {
-  return [...new Set(dict.filter(w => w && sent.includes(w)))];
+  const found = [];
+  for (const w of dict) {
+    if (!w) continue;
+    let idx = sent.indexOf(w);
+    let hit = false;
+    while (idx !== -1) {
+      const before = sent.slice(Math.max(0, idx - 4), idx);
+      const oneCharCombo = sent.slice(Math.max(0, idx - 1), idx + w.length);
+      if (NEGATION_FALSE_POSITIVES.has(oneCharCombo) || !NEGATION_MARKERS.test(before)) { hit = true; break; }
+      idx = sent.indexOf(w, idx + w.length);
+    }
+    if (hit) found.push(w);
+  }
+  return found;
 }
 
 function dictMatches(sent) {
@@ -152,7 +168,14 @@ function localCat(sent, m) {
   const counts = {POS:m.POS.length, NEG:m.NEG.length, LIT:m.LIT.length, UNC:m.UNC.length};
   const max = Math.max(counts.POS, counts.NEG, counts.LIT, counts.UNC);
   if (max === 0) return ['NONE'];
-  return Object.keys(counts).filter(k => counts[k] === max);
+  const winners = Object.keys(counts).filter(k => counts[k] === max);
+  // 一句話同時命中 POS 與 NEG 時，兩邊都保留、不讓詞數多的一方整句通吃——理由與實測數字見網頁版註解與 README
+  if (counts.POS > 0 && counts.NEG > 0) {
+    const set = new Set(winners);
+    set.add('POS'); set.add('NEG');
+    return [...set];
+  }
+  return winners;
 }
 
 const MGMT_TITLES = /總經理|執行長|CEO|CFO|COO|CTO|副總|董事長|董事|首席|主管|協理|經理|財務長|發言人|副發言人|管理層|會計主管|業務|資深/;

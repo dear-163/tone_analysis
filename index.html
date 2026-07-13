@@ -457,8 +457,31 @@ function isNeutral(sent) {
   return false;
 }
 
+// 否定詞：緊接在字典詞「正前方」時，代表這個詞被否定了（例如「並未達到」「沒有影響」），
+// 不能直接照字面算進原本的類別。實測真實語料發現：POS 字典命中裡有 2.00% 緊接在否定詞後面
+// （NEG 只有 1.13%），兩邊都有、但 POS 被誤判成正向的比例明顯更高，是把分數往正面推的原因之一。
+// 抓不到「否定詞→應該反轉成哪個類別」這麼細（例如「沒有風險」其實偏正向、「不會成長」其實偏負向，
+// 沒有通用規則），所以保守處理：偵測到緊鄰否定詞就直接不算進該類別（視為中性），而不是硬猜要翻到哪一類。
+const NEGATION_MARKERS = /(不|沒有|沒|無|未|尚未|未曾|難以|無法|並未|並無)$/;
+// 少數狀況是「否定詞（只有 1 個字）+ 字典詞」剛好黏成另一個意義完全不同的固定複合詞，
+// 不是「這個詞被否定」——例如「不動產」（房地產類資產）跟字典詞「動產」（可移動財產）是兩個對比詞，
+// 不是「動產」被「不」否定，實測全語料有 703 句因此被誤判排除。之後如果實測發現同類狀況可以繼續加。
+const NEGATION_FALSE_POSITIVES = new Set(['不動產']);
 function matches(sent, dict) {
-  return [...new Set(dict.filter(w => w && sent.includes(w)))];
+  const found = [];
+  for (const w of dict) {
+    if (!w) continue;
+    let idx = sent.indexOf(w);
+    let hit = false;
+    while (idx !== -1) {
+      const before = sent.slice(Math.max(0, idx - 4), idx);
+      const oneCharCombo = sent.slice(Math.max(0, idx - 1), idx + w.length);
+      if (NEGATION_FALSE_POSITIVES.has(oneCharCombo) || !NEGATION_MARKERS.test(before)) { hit = true; break; }
+      idx = sent.indexOf(w, idx + w.length);
+    }
+    if (hit) found.push(w);
+  }
+  return found;
 }
 
 // 一次算出四個字典的命中詞清單，count 用 .length 推導，避免同一句話對同一份字典重複掃描兩次
@@ -477,7 +500,18 @@ function localCat(sent, m) {
   const counts = {POS:m.POS.length, NEG:m.NEG.length, LIT:m.LIT.length, UNC:m.UNC.length};
   const max = Math.max(counts.POS, counts.NEG, counts.LIT, counts.UNC);
   if (max === 0) return ['NONE'];
-  return Object.keys(counts).filter(k => counts[k] === max);
+  const winners = Object.keys(counts).filter(k => counts[k] === max);
+  // 「雖然...但是...」這種一句話同時褒貶皆有的句子，原本是詞數多的一方整句通吃、少的一方訊號被完全丟棄
+  // （實測：真實語料裡同句命中 POS 又命中 NEG 的句子佔 8.10%，其中詞數多的一方通吃時，
+  // POS 通吃掉 NEG 訊號的次數是反過來（NEG 通吃掉 POS）的 2.7 倍，是把分數推向正面的另一個原因）。
+  // 只要 POS、NEG 在同一句都有命中，不管誰的詞數比較多，兩邊都保留，讓 calcTone 的分子自然相抵，
+  // 而不是誰詞多就吃掉對方——跟原本「剛好平手才兩個都算」的行為一致，只是不再要求「剛好平手」這個條件
+  if (counts.POS > 0 && counts.NEG > 0) {
+    const set = new Set(winners);
+    set.add('POS'); set.add('NEG');
+    return [...set];
+  }
+  return winners;
 }
 
 // 管理層職稱關鍵字（純職稱，不含姓名）
