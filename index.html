@@ -23,6 +23,7 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--tx);
 .btn-primary:disabled{background:var(--s2);color:var(--tx2);cursor:not-allowed;transform:none}
 .btn-ghost{background:transparent;border:1px solid var(--bd);color:var(--tx2)}
 .btn-ghost:hover{border-color:var(--a2);color:var(--a2)}
+.btn-ghost:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 input,textarea,select{background:var(--s2);border:1px solid var(--bd);color:var(--tx);border-radius:8px;padding:9px 13px;font-size:13px;font-family:'Noto Sans TC',sans-serif;width:100%;outline:none;transition:border-color .15s}
 input:focus,textarea:focus,select:focus{border-color:var(--a2)}
 textarea{resize:vertical;min-height:110px}
@@ -147,6 +148,14 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
     </div>
   </div>
 
+  <div id="restore-banner" class="card fade-in" style="display:none;padding:12px 16px;margin-bottom:16px;border-color:rgba(124,58,237,.4);align-items:center;justify-content:space-between;gap:12px">
+    <span style="font-size:11px;color:var(--tx2)" id="restore-banner-text"></span>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn btn-ghost" style="width:auto;padding:6px 12px;font-size:10px" onclick="restoreBackup()">恢復結果</button>
+      <button class="btn btn-ghost" style="width:auto;padding:6px 12px;font-size:10px" onclick="dismissBackup()">忽略</button>
+    </div>
+  </div>
+
   <div class="grid">
     <!-- Left Panel -->
     <div class="col">
@@ -220,6 +229,7 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
           <div class="mono" style="font-size:9px;color:var(--tx2);text-align:right;margin-top:5px" id="prog-text">0/0</div>
         </div>
         <button class="btn btn-primary" style="margin-top:12px" id="run-btn" onclick="runBatch()" disabled>▶ 啟動批次分析</button>
+        <button class="btn btn-ghost" style="margin-top:8px;display:none;color:var(--neg);border-color:rgba(248,113,113,.4)" id="abort-btn" onclick="abortBatch()">■ 中止本次分析</button>
       </div>
 
       <!-- Export Card -->
@@ -245,8 +255,8 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
         <div style="padding:12px 18px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
           <span class="mono" style="font-size:9px;font-weight:700;color:var(--tx2);letter-spacing:.12em;text-transform:uppercase">BATCH QUEUE (<span id="q-count">0</span>)</span>
           <div style="display:flex;gap:8px">
-            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" onclick="clearQueue()">清除佇列</button>
-            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" onclick="clearAll()">全部清除</button>
+            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" id="clear-queue-btn" onclick="clearQueue()">清除佇列</button>
+            <button class="btn btn-ghost" style="padding:3px 9px;font-size:9px" id="clear-all-btn" onclick="clearAll()">全部清除</button>
           </div>
         </div>
         <div class="scroll-box" style="max-height:150px;padding:10px 14px">
@@ -309,6 +319,14 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
 // ── LocalStorage 儲存輔助 ──────────────────────────────────────────
 function persistGet(k,def){ try{ const raw=localStorage.getItem(k); return raw?JSON.parse(raw):def; }catch{return def;} }
 function persistSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+
+// 檔名、手動貼上的樣本 ID、逐字稿句子全部是使用者可控內容，畫面上多處用 innerHTML 拼接顯示，
+// 沒有這層 escape 的話，一個惡意檔名或被動過手腳的逐字稿就能在頁面內執行任意 JS，
+// 而同一頁面又明文放著 Gemini API Key（input 欄位＋localStorage），等於一次 XSS 就能連 Key 一起偷走。
+const HTML_ESCAPE_MAP = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c => HTML_ESCAPE_MAP[c]);
+}
 
 // ── 字典 ──────────────────────────────────────────────────────────
 const DICTS = {
@@ -443,6 +461,11 @@ let queue = [], results = [], exclusions = [...DEFAULT_EXCLUSIONS], processing =
 // 一旦確認是這種情況，後續所有 AI 呼叫直接跳過重試、快速 fallback 回字典，避免對 2000+ 份檔案的批次
 // 每個 chunk 都白白重試+等待數十秒到數分鐘，浪費使用者的時間。
 let dailyQuotaExhausted = false;
+// 使用者主動按下「中止本次分析」時設為 true。批次規模一大（2000+ 份檔案）、
+// 又疊加 chunk 內重試＋sweep 整輪重試，最壞情況可能卡上數十分鐘，使用者除了整頁重新整理
+// （會遺失所有尚未寫出的進度）之外沒有其他脫身手段，所以需要一個能真正中斷重試迴圈的旗標，
+// 用法跟 dailyQuotaExhausted 一致：所有重試/等待迴圈都要檢查它並提早跳出
+let userAborted = false;
 
 // ── 排除判斷 ──────────────────────────────────────────────────────
 function isNeutral(sent) {
@@ -676,11 +699,13 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     const chunk = chunks[idx];
     if (onProgress) onProgress(idx + 1, chunks.length);
     let delay = 1000, ok = false, lastErr = null;
-    for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
+    for (let r = 0; r < 4 && !dailyQuotaExhausted && !userAborted; r++) {
       try {
-        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          // Key 走 header 而非 URL query string：query string 版本的 Key 會被瀏覽器擴充功能的請求記錄器、
+          // 企業 proxy 日誌、devtools HAR 匯出檔等非預期管道記下來，改用官方建議的 x-goog-api-key header 可避免這點
+          headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: JSON.stringify({
             contents: [{parts: [{text: chunk.texts.join('\n\n')}]}],
             systemInstruction: {parts: [{text: CLASSIFY_PROMPT}]},
@@ -690,15 +715,12 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
-          if (res.status === 429 && isDailyQuotaError(errText)) {
-            console.warn('batchClassifyRoles: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
-            dailyQuotaExhausted = true;
-            showQuotaBanner();
+          if (res.status === 429 && checkQuotaExhausted(errText, 'batchClassifyRoles')) {
             lastErr = new Error(`API error: ${res.status} - ${errText}`);
             break;
           }
           const suggested = parseRetryDelaySeconds(errText);
-          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          const waitMs = computeWaitMs(suggested, delay);
           console.warn(`Gemini API batchClassifyRoles returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
           lastErr = new Error(`API error: ${res.status} - ${errText}`);
           await sleep(waitMs); delay *= 1.8; continue;
@@ -725,7 +747,7 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
     // chunk 之間固定間隔：實測 Google 用量儀表板顯示 TPM（每分鐘輸入 token 數）曾經超標，
     // 光靠切小 chunk 不夠，還需要拉開送出間隔才不會短時間內塞爆。
     // 但如果已經確認整日額度用完，後面的 chunk 再等也沒用，直接跳過間隔快速結束這個階段
-    if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
+    if (idx < chunks.length - 1 && !dailyQuotaExhausted && !userAborted) await sleep(2000);
   }
 
   const usedFiles = new Set(items.map(it => it.fileIdx));
@@ -950,6 +972,15 @@ function parseRetryDelaySeconds(errBody) {
   return null;
 }
 
+// Google 自己建議的秒數要照實遵守，不能用一個武斷的上限去蓋過去——如果 Google 說要等 90 秒，
+// 蓋成 65 秒等於故意提早重試、賭一次幾乎必敗的請求，白白燒掉重試次數。
+// 上限只用在「沒有 RetryInfo、只能用固定指數退避硬猜」的 fallback 路徑，避免 delay*=1.8 疊代幾輪後失控變得過長。
+const FALLBACK_DELAY_CAP_MS = 65000;
+function computeWaitMs(suggestedSeconds, fallbackDelayMs) {
+  if (suggestedSeconds != null) return suggestedSeconds * 1000 + 500;
+  return Math.min(fallbackDelayMs, FALLBACK_DELAY_CAP_MS);
+}
+
 // 判斷 429 是否為「每日額度 (RPD) 用完」，而不是 RPM/TPM 那種每分鐘滾動視窗限制。
 // Google 的 QuotaFailure 錯誤會在 violations[].quotaId／quotaMetric 帶出被超過的額度種類，
 // 每日額度的 quotaId 固定包含 "PerDay"（例如 "GenerateRequestsPerDayPerProjectPerModel-FreeTier"），
@@ -963,6 +994,17 @@ function isDailyQuotaError(errBody) {
     if (/per\s*day/i.test(parsed?.error?.message || errBody)) return true;
   } catch (e) {}
   return false;
+}
+
+// 三個 AI 函式都要處理一樣的「429 且是每日額度用完」判斷與後續動作（設旗標、跳橫幅、記 log），
+// 抽成共用函式後三處呼叫點不用各自維護一份幾乎一模一樣的程式碼；回傳 true 代表呼叫方應該
+// 直接跳出重試迴圈（等於真正的最後一輪），不用再等、再試
+function checkQuotaExhausted(errText, fnName) {
+  if (!isDailyQuotaError(errText)) return false;
+  console.warn(`${fnName}: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。`, errText);
+  dailyQuotaExhausted = true;
+  showQuotaBanner();
+  return true;
 }
 
 function packIntoChunks(groups, metas) {
@@ -1001,11 +1043,11 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
     const chunk = chunks[idx];
     if (onProgress) onProgress(idx + 1, chunks.length);
     let delay = 1000, ok = false, lastErr = null;
-    for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
+    for (let r = 0; r < 4 && !dailyQuotaExhausted && !userAborted; r++) {
       try {
-        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: JSON.stringify({
             contents: [{parts: [{text: chunk.texts.join('\n\n')}]}],
             systemInstruction: {parts: [{text: QA_FINDER_PROMPT}]},
@@ -1014,15 +1056,12 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
         });
         if (res.status === 429 || res.status >= 500) {
           const errText = await res.text();
-          if (res.status === 429 && isDailyQuotaError(errText)) {
-            console.warn('batchFindQAStart: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
-            dailyQuotaExhausted = true;
-            showQuotaBanner();
+          if (res.status === 429 && checkQuotaExhausted(errText, 'batchFindQAStart')) {
             lastErr = new Error(`API error: ${res.status} - ${errText}`);
             break;
           }
           const suggested = parseRetryDelaySeconds(errText);
-          const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+          const waitMs = computeWaitMs(suggested, delay);
           console.warn(`Gemini API batchFindQAStart returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
           lastErr = new Error(`API error: ${res.status} - ${errText}`);
           await sleep(waitMs); delay *= 1.8; continue;
@@ -1047,7 +1086,7 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
     if (!ok) chunk.metas.forEach(fi => errorFiles.add(fi));
     // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）。
     // 但如果已確認整日額度用完，後面再等也沒用，直接跳過快速結束這個階段
-    if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
+    if (idx < chunks.length - 1 && !dailyQuotaExhausted && !userAborted) await sleep(2000);
   }
 
   const usedFiles = new Set(fileEntries.map(f => f.fileIdx));
@@ -1075,12 +1114,18 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
   if (!items.length) return {resultMap: {}, error: false};
   const resultMap = {};
   let pending = items;
+  // 記錄「最近一次真的送出請求」的時間點，讓整輪重試前的冷卻改成「距離上次請求還缺多久」，
+  // 而不是每次都無腦等滿 15 秒——同一輪裡最早失敗的 chunk 可能早就等超過一分鐘（冷卻其實不需要），
+  // 最後一個 chunk 才剛失敗幾秒（15 秒可能還不夠），固定值對兩種情況都不準
+  let lastRequestAt = 0;
 
-  for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length && !dailyQuotaExhausted; sweep++) {
+  for (let sweep = 0; sweep <= UNC_SWEEP_MAX && pending.length && !dailyQuotaExhausted && !userAborted; sweep++) {
     const isLastSweep = sweep === UNC_SWEEP_MAX;
     if (sweep > 0) {
-      console.warn(`batchRefine: 第 ${sweep} 輪整批重試，還有 ${pending.length} 句沒拿到 AI 結果，等 ${UNC_SWEEP_COOLDOWN_MS/1000} 秒讓額度視窗恢復...`);
-      await sleep(UNC_SWEEP_COOLDOWN_MS);
+      const elapsed = performance.now() - lastRequestAt;
+      const remain = Math.max(0, UNC_SWEEP_COOLDOWN_MS - elapsed);
+      console.warn(`batchRefine: 第 ${sweep} 輪整批重試，還有 ${pending.length} 句沒拿到 AI 結果，距上次請求已過 ${Math.round(elapsed/1000)}s，再等 ${Math.round(remain/1000)}s 讓額度視窗恢復...`);
+      if (remain > 0) await sleep(remain);
     }
     // 舊版固定「每 400 句一批」，跟句子實際長度脫鉤：真實語料通常一份就有好幾萬句 UNC，
     // 400 句/chunk 換算下來整批可能要 300+ 次請求，跟角色分類、問答起點三項加起來很容易逼近
@@ -1097,23 +1142,19 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
       const msg = chunks[idx].texts.join('\n');
       let chunkResultMap = {};
       let delay = 1000, ok = false;
-      for (let r = 0; r < 4 && !dailyQuotaExhausted; r++) {
+      for (let r = 0; r < 4 && !dailyQuotaExhausted && !userAborted; r++) {
         try {
-          const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
+          const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+            method: 'POST', headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
             // maxOutputTokens 跟著拉高：chunk 現在裝的句數比以前多很多，輸出的 JSON 欄位數也跟著變多
             body: JSON.stringify({contents:[{parts:[{text: msg}]}], systemInstruction:{parts:[{text: GMINI_PROMPT}]}, generationConfig:{temperature:0, maxOutputTokens:32768, responseMimeType:'application/json'}})
           });
+          lastRequestAt = performance.now();
           if (res.status === 429 || res.status >= 500) {
             const errText = await res.text();
-            if (res.status === 429 && isDailyQuotaError(errText)) {
-              console.warn('batchRefine: 偵測到每日額度 (RPD) 已用完，本次執行不再重試 AI，直接 fallback 回字典。', errText);
-              dailyQuotaExhausted = true;
-              showQuotaBanner();
-              break;
-            }
+            if (res.status === 429 && checkQuotaExhausted(errText, 'batchRefine')) break;
             const suggested = parseRetryDelaySeconds(errText);
-            const waitMs = suggested != null ? Math.min(suggested * 1000 + 500, 65000) : delay;
+            const waitMs = computeWaitMs(suggested, delay);
             console.warn(`Gemini API batchRefine returned ${res.status} (attempt ${r+1}), retrying after ${Math.round(waitMs/1000)}s...`, errText);
             await sleep(waitMs); delay *= 1.8; continue;
           }
@@ -1135,12 +1176,15 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
       const missing = chunks[idx].metas.filter(it => !(it.label in chunkResultMap));
       // 只有「最後一輪還是失敗」才算真正的錯誤、通知呼叫方 fallback 回字典；
       // 還有機會在下一輪重試的，先把這個 chunk 裡已經成功的部分套用上去，暫不標記失敗。
-      // 已確認整日額度用完時，即使還沒到 UNC_SWEEP_MAX，之後也不會再重試了，等同真正的最後一輪
-      if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, (isLastSweep || dailyQuotaExhausted) && missing.length > 0);
+      // 已確認整日額度用完或使用者中止時，即使還沒到 UNC_SWEEP_MAX，之後也不會再重試了，等同真正的最後一輪。
+      // 注意：這裡傳的是「這是不是最後一輪」這個 call 層級的旗標，不是「這個 chunk 有沒有缺句」——
+      // 缺句與否要由呼叫方逐句判斷（chunkResultMap 裡有沒有該句的 key），
+      // 不能把兩者合成一個布林值，否則同一個 chunk 裡其他明明成功的句子會被一起誤判成失敗
+      if (onChunkDone) onChunkDone(chunks[idx].metas, chunkResultMap, isLastSweep || dailyQuotaExhausted || userAborted);
       stillMissing.push(...missing);
       // chunk 之間固定間隔，避免短時間內送出的 token 總量超過每分鐘限制（TPM）。
       // 但如果已確認整日額度用完，後面再等也沒用，直接跳過快速結束這個階段
-      if (idx < chunks.length - 1 && !dailyQuotaExhausted) await sleep(2000);
+      if (idx < chunks.length - 1 && !dailyQuotaExhausted && !userAborted) await sleep(2000);
     }
     pending = stillMissing;
   }
@@ -1172,6 +1216,14 @@ function aiBadge(r){
   if (r.aiUsed && r.aiError && r.aiAnySuccess) return '<span class="b-ai-err" title="部分句子/階段成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
   return '<span class="b-ai-off">字典</span>';
 }
+// 純文字版本，給 CSV 匯出用（aiBadge 回傳的是 HTML）。摘要報表最常被往外分享（給管理層、IR），
+// 使用者如果不特地點開逐句明細，看不出這份報表的 Tone 分數有多少比例只是字典猜測，
+// 這裡把資料可信度直接寫進報表本身，而不是只留在畫面上
+function aiStatusText(r){
+  if (r.aiUsed && !r.aiError) return 'AI完成';
+  if (r.aiUsed && r.aiError && r.aiAnySuccess) return '部分AI';
+  return '字典';
+}
 
 // 每日額度 (RPD) 用完的橫幅：跟 setAiStatus 分開顯示，因為 setAiStatus 會被後續各階段的
 // running/done 狀態不斷覆蓋，若共用同一個位置，這則重要訊息一閃就被蓋掉，使用者根本來不及看到
@@ -1189,7 +1241,7 @@ function setAiStatus(s, errMsg){
   if(s==='running') el.innerHTML='<span class="b-ai-on">AI 分析中</span>';
   else if(s==='done') el.innerHTML='<span class="b-ai-on">✓ 完成</span>';
   else if(s==='error') {
-    el.innerHTML=`<span class="b-ai-off" title="${errMsg||''}">！失敗</span>${errMsg ? `<div style="font-size:10px;color:var(--neg);margin-top:4px;white-space:pre-wrap;max-width:250px;text-align:left;line-height:1.4">${errMsg}</div>` : ''}`;
+    el.innerHTML=`<span class="b-ai-off" title="${escapeHtml(errMsg||'')}">！失敗</span>${errMsg ? `<div style="font-size:10px;color:var(--neg);margin-top:4px;white-space:pre-wrap;max-width:250px;text-align:left;line-height:1.4">${escapeHtml(errMsg)}</div>` : ''}`;
   }
   else el.innerHTML='';
 }
@@ -1205,7 +1257,7 @@ function renderExclPanel() {
   const cats = document.getElementById('excl-cats');
   cats.innerHTML = Object.entries(bycat).map(([cat,items])=>{
     const m = CAT_META[cat]||{label:cat,cls:'cat-custom',emoji:'•'};
-    const tags = items.map(ex=>`<span class="excl-tag">${ex.label}<button onclick="removeExcl('${ex.id}')">✕</button></span>`).join('');
+    const tags = items.map(ex=>`<span class="excl-tag">${escapeHtml(ex.label)}<button onclick="removeExcl('${ex.id}')">✕</button></span>`).join('');
     return `<div style="margin-top:12px"><div style="display:flex;align-items:center;margin-bottom:5px"><span class="cat-lbl ${m.cls}">${m.emoji} ${m.label}</span><span style="font-size:9px;color:var(--tx2)">${items.length} 條</span></div><div>${tags}</div></div>`;
   }).join('');
 }
@@ -1266,7 +1318,7 @@ function renderQueue(){
   g.innerHTML=queue.map((item,i)=>{
     const cls=i===currentIdx?'active':item.status==='done'?'done':item.status==='error'?'error':'';
     const icon=item.status==='done'?`<span style="color:var(--pos)">✓</span>`:item.status==='error'?`<span style="color:var(--neg);font-size:9px">ERR</span>`:i===currentIdx?`<div style="width:10px;height:10px;border:2px solid var(--ac);border-top-color:transparent;border-radius:50%" class="spin"></div>`:`<span style="font-size:9px;color:var(--tx2)">WAIT</span>`;
-    return `<div class="q-item ${cls}"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</span>${icon}</div>`;
+    return `<div class="q-item ${cls}"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(item.name)}</span>${icon}</div>`;
   }).join('');
   const done=queue.filter(i=>i.status==='done').length;
   document.getElementById('prog-wrap').style.display=queue.length?'block':'none';
@@ -1303,7 +1355,29 @@ function addTestSample(){
 // 這裡如果讓使用者把陣列整個換成新的空陣列，正在跑的迴圈下一次存取就會拿到 undefined 而炸掉。
 // 批次跑到一半時直接擋掉，不做任何清空
 function clearQueue(){ if(processing) return; queue=[];renderQueue(); }
-function clearAll(){ if(processing) return; queue=[];results=[];currentIdx=-1;renderQueue();renderResults(); }
+function clearAll(){ if(processing) return; queue=[];results=[];currentIdx=-1;localStorage.removeItem('tone_results_backup');renderQueue();renderResults(); }
+
+// ── 崩潰保護：備份已完成的分析結果 ───────────────────────────────
+// 佇列裡的檔案（File 物件／尚未上傳的內容）無法序列化進 localStorage，沒辦法整批復原；
+// 但已經算出來的 results（字典＋AI 分析分數）是純資料，備份成本低、也是使用者最不想遺失的部分。
+// 只在 Pass 5 剛寫入初步結果、以及整批次結束時備份兩個時機點，不在 Pass 6 每個 chunk 都寫，
+// 避免大批次下每個 chunk 都整包 JSON.stringify 寫入 localStorage 造成效能負擔或撞到儲存配額
+// （persistSet 內部已經 try/catch，配額爆掉時只是安靜地不寫入，不會讓分析中斷）。
+function backupResults(){
+  if (!results.length) return;
+  persistSet('tone_results_backup', results);
+}
+function restoreBackup(){
+  const backup = persistGet('tone_results_backup', null);
+  document.getElementById('restore-banner').style.display = 'none';
+  if (!backup || !backup.length) return;
+  results = backup;
+  renderResults();
+}
+function dismissBackup(){
+  localStorage.removeItem('tone_results_backup');
+  document.getElementById('restore-banner').style.display = 'none';
+}
 
 // ── Run ────────────────────────────────────────────────────────────
 // 整個批次分成幾個階段跑：先把所有檔案都做完純字典分析（不叫 AI），
@@ -1317,8 +1391,10 @@ async function runBatch(){
   processing=true;
   document.getElementById('proc-badge').style.display='flex';
   document.getElementById('run-btn').disabled=true;
+  document.getElementById('abort-btn').style.display='block';
   setAiStatus('');
   dailyQuotaExhausted = false;
+  userAborted = false;
   hideQuotaBanner();
   // 六個 Pass 中有任何一個拋出沒被內部 try/catch 接住的例外，都要確保 processing 被重設、
   // 按鈕恢復可按——否則 processing 卡在 true，使用者只能重新整理整個頁面才能再跑一次
@@ -1335,6 +1411,7 @@ async function runBatch(){
   // ── Pass 1：純字典分析（切句 + 角色），不叫 AI ──────────────────
   const files = []; // {qIdx, fileIdx, name, allSents, isMarker, roles, aiUsed, aiError}
   for (let k=0; k<pending.length; k++) {
+    if (userAborted) break; // 2000+ 檔案時單純字典解析也不是瞬間完成，中止要在這裡也生效，不是只擋 AI 呼叫
     const i = pending[k];
     currentIdx = i;
     updateProgUI(Math.round((k / pending.length) * 10), `[1/5] 本地解析中 (${k+1}/${pending.length})`);
@@ -1357,7 +1434,7 @@ async function runBatch(){
   currentIdx = -1;
 
   // ── Pass 2：批次角色分類 AI（整批只呼叫幾次，而不是一份檔案一次）──────
-  if (aiOn) {
+  if (aiOn && !userAborted) {
     const needRoles = files.filter(f => f.roles.some(r => r===null));
     if (needRoles.length) {
       updateProgUI(10, `[2/5] AI 角色判斷中...`);
@@ -1390,7 +1467,7 @@ async function runBatch(){
   });
 
   // ── Pass 4：批次 Q&A 起點 AI（只有關鍵字判斷失敗的檔案才需要）───────
-  if (aiOn && needPhaseAI.length) {
+  if (aiOn && needPhaseAI.length && !userAborted) {
     updateProgUI(50, `[3/5] AI 問答起點定位中...`);
     setAiStatus('running'); renderQueue();
     try {
@@ -1429,9 +1506,10 @@ async function runBatch(){
   });
   updateProgUI(75, `[4/5] 已顯示初步結果，AI 不確定句精煉中...`);
   renderQueue(); renderResults();
+  backupResults();
 
   // ── Pass 6：批次 UNC 方向 AI（整批只呼叫幾次，但每個 chunk 一完成就更新畫面）───
-  if (aiOn && uncPool.length) {
+  if (aiOn && uncPool.length && !userAborted) {
     setAiStatus('running');
     const byFile = new Map();
     files.forEach(f => byFile.set(f.fileIdx, f));
@@ -1476,7 +1554,14 @@ async function runBatch(){
         }
       });
       affected.forEach(fi => recalcAndUpdate(byFile.get(fi)));
-      renderQueue(); renderResults();
+      // 數字一定每個 chunk 都重算（上面 recalcAndUpdate 不受影響），但重畫整張表／整個 grid 這種
+      // O(已完成筆數) 的 DOM 重建套用 Pass 1 自己訂的節流間隔，避免大批次（UNC chunk 數上百上千時）
+      // 每個 chunk 都整表重繪造成卡頓；沿用同一組 RENDER_MIN_INTERVAL/lastRenderAt，跟 Pass 1 一致
+      const now = performance.now();
+      if (now - lastRenderAt >= RENDER_MIN_INTERVAL) {
+        renderQueue(); renderResults();
+        lastRenderAt = now;
+      }
     };
 
     const {error} = await batchRefine(uncPool, model, apiKey,
@@ -1488,10 +1573,21 @@ async function runBatch(){
   } finally {
     // ── 收尾（不管中途是否拋出例外，都一定會執行）────────────────
     processing=false; currentIdx=-1;
+    if (userAborted) setAiStatus('error', '已中止：剩餘尚未完成的檔案仍留在佇列中（不會被標記為已完成），可以直接重新按下開始繼續分析。');
     renderQueue(); renderResults();
+    backupResults();
     document.getElementById('proc-badge').style.display='none';
     document.getElementById('run-btn').disabled=false;
+    document.getElementById('abort-btn').style.display='none';
   }
+}
+
+// 使用者主動中止：只設旗標，讓所有已在跑的 for 迴圈與 sweep 迴圈在下一次迭代自然跳出，
+// 不用 AbortController 硬砍 fetch——這樣已經送出、正在等回應的那一個請求還是會正常拿到結果並套用，
+// 只是不會再送出新的請求，行為跟 dailyQuotaExhausted 快速失敗的機制完全一致
+function abortBatch(){
+  if (!processing) return;
+  userAborted = true;
 }
 
 // ── Results Table ──────────────────────────────────────────────────
@@ -1511,7 +1607,7 @@ function renderResults(){
     const ts=r.counts.P.total+r.counts.Q.total;
     const tc=toneColor(r.Tone_T);
     return `<tr class="fade-in">
-      <td style="font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</td>
+      <td style="font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.name)}</td>
       <td class="mono" style="color:${toneColor(r.Tone_P)}">${r.Tone_P.toFixed(4)}</td>
       <td class="mono" style="color:${toneColor(r.Tone_Q)}">${r.Tone_Q.toFixed(4)}</td>
       <td><span class="mono" style="font-weight:700;color:${tc}">${r.Tone_T.toFixed(4)}</span>${toneBar(r.Tone_T,tc)}</td>
@@ -1543,7 +1639,7 @@ const CAT_CLS={POS:'b-pos',NEG:'b-neg',LIT:'b-lit',UNC:'b-unc',NEUTRAL:'b-neu',N
 function openModal(idx){
   detailResult=results[idx];
   modalFilter='ALL';
-  document.getElementById('modal-title').innerHTML=`${detailResult.name} ${aiBadge(detailResult)}`;
+  document.getElementById('modal-title').innerHTML=`${escapeHtml(detailResult.name)} ${aiBadge(detailResult)}`;
   renderModal();
   document.getElementById('modal').style.display='flex';
 }
@@ -1581,7 +1677,7 @@ function renderModal(){
         <span class="badge b-none">${row.phase===0?'報告段':'問答段'}</span>
         ${refBadge}
       </div>
-      <div class="s-text${rowCats.includes('NEUTRAL')?' dim':''}">${row.sentence}</div>
+      <div class="s-text${rowCats.includes('NEUTRAL')?' dim':''}">${escapeHtml(row.sentence)}</div>
       ${chips?`<div class="chips">${chips}</div>`:''}
     </div>`;
   }).join(''):'<div style="text-align:center;color:var(--tx2);font-size:12px;padding:40px">無相符句子</div>';
@@ -1592,10 +1688,13 @@ function setFilter(f){modalFilter=f;renderModal();}
 function csvEsc(v){ return `"${String(v==null?'':v).replace(/"/g,'""')}"`; }
 function exportSummary(){
   if(!results.length) return;
-  const hdr='Company,Tone_P,Tone_Q,Tone_T,Pos_P,Neg_P,Lit_P,Unc_P,Neutral_P,Total_P,Pos_Q,Neg_Q,Lit_Q,Unc_Q,Neutral_Q,Total_Q\n';
+  const hdr='Company,Tone_P,Tone_Q,Tone_T,Pos_P,Neg_P,Lit_P,Unc_P,Neutral_P,Total_P,Pos_Q,Neg_Q,Lit_Q,Unc_Q,Neutral_Q,Total_Q,AI_Status,UNC_AI_Confirmed_Pct\n';
   const rows=results.map(r=>{
     const{P,Q}=r.counts;
-    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total}`;
+    const uncTotal = (P.unc||0)+(Q.unc||0);
+    const uncConfirmed = (r.details||[]).filter(d=>d.aiRefined).length;
+    const uncPct = uncTotal>0 ? (uncConfirmed/uncTotal*100).toFixed(1) : '';
+    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total},${csvEsc(aiStatusText(r))},${uncPct}`;
   });
   dl('\uFEFF'+hdr+rows.join('\n'),'Tone_Summary.csv');
 }
@@ -1624,6 +1723,12 @@ if (savedKey) {
   keyInput.dispatchEvent(new Event('input'));
 }
 
+const resultsBackup = persistGet('tone_results_backup', null);
+if (resultsBackup && resultsBackup.length) {
+  document.getElementById('restore-banner-text').textContent =
+    `偵測到上次分析未正常結束，還留有 ${resultsBackup.length} 筆已完成的結果（原本上傳的檔案佇列無法還原，需要重新選擇；已完成的分析結果可以先救回並匯出）。`;
+  document.getElementById('restore-banner').style.display = 'flex';
+}
 
 renderQueue();
 renderResults();
