@@ -743,7 +743,7 @@ async function batchClassifyRoles(fileEntries, model, apiKey, onProgress) {
       } catch (e) {
         console.error(`batchClassifyRoles attempt ${r+1} failed:`, e);
         lastErr = e;
-        if (r < 3) { await sleep(delay); delay *= 1.8; }
+        if (r < 3 && !dailyQuotaExhausted && !userAborted) { await sleep(delay); delay *= 1.8; }
       }
     }
     // 這個 chunk 徹底失敗也不中斷：其他 chunk 的結果照樣套用，
@@ -1083,7 +1083,7 @@ async function batchFindQAStart(fileEntries, model, apiKey, onProgress) {
       } catch (e) {
         console.error(`batchFindQAStart attempt ${r+1} failed:`, e);
         lastErr = e;
-        if (r < 3) { await sleep(delay); delay *= 1.8; }
+        if (r < 3 && !dailyQuotaExhausted && !userAborted) { await sleep(delay); delay *= 1.8; }
       }
     }
     // chunk 徹底失敗只標記該 chunk 涵蓋的檔案，不中斷：其他 chunk 的結果照樣套用
@@ -1174,7 +1174,7 @@ async function batchRefine(items, model, apiKey, onProgress, onChunkDone) {
           ok = true; break;
         } catch (e) {
           console.error('batchRefine error:', e);
-          if (r < 3) { await sleep(delay); delay *= 1.8; }
+          if (r < 3 && !dailyQuotaExhausted && !userAborted) { await sleep(delay); delay *= 1.8; }
         }
       }
       const missing = chunks[idx].metas.filter(it => !(it.label in chunkResultMap));
@@ -1200,10 +1200,17 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 // fetch 本身沒有預設逾時，如果 API 卡住或回應極慢，await 會永遠卡住、整個批次跟著卡死。
 // 用 AbortController 強制在 GEMINI_TIMEOUT_MS 後放棄這次請求，讓上層的 catch 接手、繼續跑下一份。
 const GEMINI_TIMEOUT_MS = 90000;
+// 正在等待中的 fetch 都要能被「中止本次分析」立刻打斷，不能只是等 90 秒逾時——
+// 實測發現使用者按下中止後最壞情況要等到這個逾時才會真的停下來，感覺起來就像按鈕完全沒用。
+// 用一個全域集合追蹤所有還在飛行中的 AbortController，abortBatch() 一按就把它們全部 abort()，
+// 讓正在等待的 fetch 立刻用 AbortError 失敗、被上層的重試迴圈接住並判斷 userAborted 後不再重試
+const activeAbortControllers = new Set();
 function fetchWithTimeout(url, options, timeoutMs = GEMINI_TIMEOUT_MS) {
   const controller = new AbortController();
+  activeAbortControllers.add(controller);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, {...options, signal: controller.signal}).finally(() => clearTimeout(timer));
+  return fetch(url, {...options, signal: controller.signal})
+    .finally(() => { clearTimeout(timer); activeAbortControllers.delete(controller); });
 }
 
 // ── UI Helpers ─────────────────────────────────────────────────────
@@ -1407,7 +1414,7 @@ async function runBatch(){
   processing=true;
   document.getElementById('proc-badge').style.display='flex';
   document.getElementById('run-btn').disabled=true;
-  document.getElementById('abort-btn').style.display='block';
+  { const b=document.getElementById('abort-btn'); b.style.display='block'; b.textContent='■ 中止本次分析'; b.disabled=false; }
   setAiStatus('');
   dailyQuotaExhausted = false;
   userAborted = false;
@@ -1623,7 +1630,7 @@ async function reapplyAI(){
   processing = true;
   document.getElementById('proc-badge').style.display='flex';
   document.getElementById('run-btn').disabled=true;
-  document.getElementById('abort-btn').style.display='block';
+  { const b=document.getElementById('abort-btn'); b.style.display='block'; b.textContent='■ 中止本次分析'; b.disabled=false; }
   dailyQuotaExhausted = false;
   userAborted = false;
   hideQuotaBanner();
@@ -1683,12 +1690,20 @@ async function reapplyAI(){
   }
 }
 
-// 使用者主動中止：只設旗標，讓所有已在跑的 for 迴圈與 sweep 迴圈在下一次迭代自然跳出，
-// 不用 AbortController 硬砍 fetch——這樣已經送出、正在等回應的那一個請求還是會正常拿到結果並套用，
-// 只是不會再送出新的請求，行為跟 dailyQuotaExhausted 快速失敗的機制完全一致
+// 使用者主動中止：設旗標讓所有重試/sweep 迴圈提早跳出，「不再送出新的請求」這件事跟
+// dailyQuotaExhausted 快速失敗機制一致；但如果剛好有一個請求已經送出、正在等回應，
+// 舊版選擇讓它自然跑完（最長可能等到 90 秒逾時），實測發現使用者會等不到這個時間就
+// 認定「中止鍵沒有用」。改成同時呼叫每個還在飛行中的 AbortController，讓它立刻失敗，
+// 上層的 catch 接手後一樣會因為 userAborted 已經是 true 而不再重試，只是不用再乾等
 function abortBatch(){
   if (!processing) return;
   userAborted = true;
+  activeAbortControllers.forEach(c => c.abort());
+  // 立刻給視覺回饋：使用者按下當下不會知道旗標有沒有生效，尤其現在還在跑的迴圈
+  // 要等到下一次檢查點才會真的跳出，畫面上如果完全沒反應會讓人以為按鈕沒用
+  const btn = document.getElementById('abort-btn');
+  btn.textContent = '■ 中止中...';
+  btn.disabled = true;
 }
 
 // ── Results Table ──────────────────────────────────────────────────
