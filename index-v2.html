@@ -267,9 +267,13 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
 
       <!-- Results Table -->
       <div class="card" style="overflow:hidden">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <span class="mono" style="font-size:9px;font-weight:700;color:var(--a2);letter-spacing:.12em;text-transform:uppercase">EMPIRICAL RESULTS</span>
-          <span class="mono" style="font-size:9px;color:var(--tx2)">COMPLETED: <span id="result-count">0</span></span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="mono" style="font-size:9px;color:var(--unc)" id="unc-pending-count"></span>
+            <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:10px" id="reapply-ai-btn" onclick="reapplyAI()" title="不重新上傳、不重新解析檔案，只針對還沒真正拿到 AI 判斷的不確定句再送一次 AI（例如額度重置後想補完殘留的失敗句子）">補套用 AI（僅未確認句）</button>
+            <span class="mono" style="font-size:9px;color:var(--tx2)">COMPLETED: <span id="result-count">0</span></span>
+          </div>
         </div>
         <div class="scroll-box" style="max-height:500px">
           <div id="results-empty" class="empty">等待分析輸出...</div>
@@ -1582,6 +1586,89 @@ async function runBatch(){
   }
 }
 
+// 只針對「已經算出結果、但不確定句還沒真正拿到 AI 判斷（字典 fallback）」的句子重新呼叫 AI，
+// 不重新上傳、不重新解析任何檔案——不管是當天額度用完、使用者中途按了中止、還是單純某個 chunk
+// 剛好失敗，事後想把殘留的失敗句子補完，都不需要把整批 2000+ 份檔案從頭跑一次浪費額度。
+// 直接從 results[].uncIndices／details 找出還沒 aiRefined 的句子，組成新的一批送給 batchRefine，
+// 沿用跟 runBatch() Pass 6 完全一樣的「chunk 一完成就更新畫面」與逐句成功/失敗判斷邏輯。
+async function reapplyAI(){
+  if (processing) return;
+  const apiKey=document.getElementById('api-key').value.trim();
+  if (apiKey.length<=10) { alert('請先在上方輸入 Gemini API Key'); return; }
+  const model='gemini-flash-lite-latest';
+
+  const pool = []; // {label, sentence, resultIdx, detailIdx, key}
+  results.forEach((r, ri) => {
+    (r.uncIndices||[]).forEach(u => {
+      const d = r.details[u.detailIdx];
+      if (!d.aiRefined) pool.push({label:`R${ri}D${u.detailIdx}`, sentence:d.sentence, resultIdx:ri, detailIdx:u.detailIdx, key:u.key});
+    });
+  });
+  if (!pool.length) { alert('目前所有不確定句都已經拿到 AI 判斷了，沒有需要補套用的句子'); return; }
+
+  processing = true;
+  document.getElementById('proc-badge').style.display='flex';
+  document.getElementById('run-btn').disabled=true;
+  document.getElementById('abort-btn').style.display='block';
+  dailyQuotaExhausted = false;
+  userAborted = false;
+  hideQuotaBanner();
+  setAiStatus('running');
+  updateProgUI(0, `補套用 AI 判斷中 (0/${pool.length} 句)...`);
+
+  try {
+    // 跟 runBatch() Pass 6 的 recalcAndUpdate 邏輯一致，只是直接操作 results[ri] 本身，
+    // 不用透過 files/byFile 這層中介（那個陣列跑完 runBatch() 就消失了，這裡本來就沒有）
+    function recalcAndUpdate(ri) {
+      const r = results[ri];
+      if (!r.uncIndices.length) return;
+      const nc = {P:{...r.counts.P,pos_u:0,neg_u:0}, Q:{...r.counts.Q,pos_u:0,neg_u:0}};
+      r.uncIndices.forEach(u => {
+        const v = r.details[u.detailIdx].refine;
+        if (v===1) nc[u.key].pos_u++;
+        else if (v===2) nc[u.key].neg_u++;
+      });
+      const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
+      r.counts = nc;
+      r.Tone_P = calcTone(nc.P); r.Tone_Q = calcTone(nc.Q); r.Tone_T = calcTone(m);
+    }
+
+    let hadAnyError = false;
+    const onChunkDone = (chunkItems, chunkResultMap, chunkFailed) => {
+      const affected = new Set();
+      chunkItems.forEach(u => {
+        const r = results[u.resultIdx];
+        if (!r) return;
+        r.aiUsed = true;
+        affected.add(u.resultIdx);
+        const v = chunkResultMap[u.label];
+        if (v == 0 || v == 1 || v == 2) {
+          r.details[u.detailIdx].refine = Number(v);
+          r.details[u.detailIdx].aiRefined = true;
+          r.aiAnySuccess = true;
+        } else if (chunkFailed) {
+          r.aiError = true; hadAnyError = true;
+        }
+      });
+      affected.forEach(ri => recalcAndUpdate(ri));
+      renderQueue(); renderResults();
+    };
+
+    const {error} = await batchRefine(pool, model, apiKey,
+      (curr, tot) => updateProgUI(Math.round((curr / tot) * 100), `補套用 AI 判斷中 (${curr}/${tot} 分組，已即時更新畫面)...`),
+      onChunkDone);
+    setAiStatus((error || hadAnyError) ? 'error' : 'done');
+  } finally {
+    processing = false;
+    if (userAborted) setAiStatus('error', '已中止：尚未處理到的句子維持原本結果，可以再次按下「補套用 AI」繼續。');
+    renderQueue(); renderResults();
+    backupResults();
+    document.getElementById('proc-badge').style.display='none';
+    document.getElementById('run-btn').disabled=false;
+    document.getElementById('abort-btn').style.display='none';
+  }
+}
+
 // 使用者主動中止：只設旗標，讓所有已在跑的 for 迴圈與 sweep 迴圈在下一次迭代自然跳出，
 // 不用 AbortController 硬砍 fetch——這樣已經送出、正在等回應的那一個請求還是會正常拿到結果並套用，
 // 只是不會再送出新的請求，行為跟 dailyQuotaExhausted 快速失敗的機制完全一致
@@ -1596,6 +1683,11 @@ function renderResults(){
   const tbl=document.getElementById('results-table');
   const body=document.getElementById('results-body');
   document.getElementById('result-count').textContent=results.length;
+  // 統計目前還有多少句不確定句「沒有真正拿到 AI 判斷」（字典 fallback），
+  // 讓使用者不用自己一份份檔案點開檢查，就知道要不要按「補套用 AI」、按下去大概要處理多少句
+  let uncPending = 0;
+  results.forEach(r => { (r.uncIndices||[]).forEach(u => { if (!r.details[u.detailIdx].aiRefined) uncPending++; }); });
+  document.getElementById('unc-pending-count').textContent = uncPending>0 ? `還有 ${uncPending} 句不確定句未套用 AI` : '';
   if(!results.length){empty.style.display='block';tbl.style.display='none';return;}
   empty.style.display='none'; tbl.style.display='table';
   body.innerHTML=results.map((r,i)=>{
