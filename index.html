@@ -1232,10 +1232,25 @@ function hasAiError(r){
 // 注意：aiAnySuccess 涵蓋角色分類／問答起點／UNC 精煉三個階段，只要任一階段對這份檔案有實際成功套用，
 // 就會是 true；不能只看 details 裡有沒有 aiRefined:true，那個欄位只有 UNC 精煉會設，
 // 角色分類或問答起點就算成功也不會反映在任何一句 detail 上，會被誤判成「字典」。
+// 「部分 AI」有兩種完全不同的成因，會誤導使用者：
+// (1) 還有不確定句沒套用 AI —— 這個可以用結果表格上方的「補套用 AI」修復
+// (2) 角色分類／問答起點判斷失敗 —— 這個沒有補救機制，因為那兩個階段需要的原始逐字稿資料
+//     （allSents/isMarker/roles）只存在於 runBatch() 執行期間的暫時 files 陣列，跑完就消失了，
+//     results[] 裡沒有留著可以重送的原始內容。實測發現使用者看到「部分AI」會直覺點「補套用 AI」，
+//     結果被告知「沒有需要補套用的句子」，以為是 bug——其實是這個徽章沒有講清楚是哪一種情況。
+// tooltip 依實際成因分開講清楚，讓使用者不會白按
 function aiBadge(r){
   const err = hasAiError(r);
   if (r.aiUsed && !err) return '<span class="b-ai-on">✓ AI</span>';
-  if (r.aiUsed && err && r.aiAnySuccess) return '<span class="b-ai-err" title="部分句子/階段成功套用 AI，其餘因失敗 fallback 回字典">部分 AI</span>';
+  if (r.aiUsed && err && r.aiAnySuccess) {
+    const uncGap = (r.uncIndices||[]).some(u => !r.details[u.detailIdx].aiRefined);
+    const roleQaErr = r.roleAiError || r.qaAiError;
+    let title;
+    if (uncGap && roleQaErr) title = '還有不確定句未套用 AI（可用「補套用 AI」修復），另外角色分類或問答起點判斷也失敗過（無法補套用，需重新上傳該檔案完整重跑）';
+    else if (uncGap) title = '還有不確定句未套用 AI，可用結果表格上方的「補套用 AI」修復';
+    else title = '角色分類或問答起點判斷失敗，不確定句本身已全部套用 AI——這個無法用「補套用 AI」修復，需重新上傳該檔案完整重跑';
+    return `<span class="b-ai-err" title="${title}">部分 AI</span>`;
+  }
   return '<span class="b-ai-off">字典</span>';
 }
 // 純文字版本，給 CSV 匯出用（aiBadge 回傳的是 HTML）。摘要報表最常被往外分享（給管理層、IR），
@@ -1625,7 +1640,18 @@ async function reapplyAI(){
       if (!d.aiRefined) pool.push({label:`R${ri}D${u.detailIdx}`, sentence:d.sentence, resultIdx:ri, detailIdx:u.detailIdx, key:u.key});
     });
   });
-  if (!pool.length) { alert('目前所有不確定句都已經拿到 AI 判斷了，沒有需要補套用的句子'); return; }
+  if (!pool.length) {
+    // 不確定句本身沒問題了，但如果還有檔案卡在角色分類／問答起點判斷失敗，
+    // 這個按鈕幫不上忙（原始逐字稿資料沒留在 results[] 裡）——要講清楚，不能只說「沒事做」，
+    // 不然使用者會覺得畫面上的「部分AI」徽章跟這裡的提示互相矛盾，以為是 bug
+    const stillBroken = results.filter(r => r.roleAiError || r.qaAiError).length;
+    if (stillBroken > 0) {
+      alert(`不確定句都已經拿到 AI 判斷了，沒有需要補套用的句子。\n\n但還有 ${stillBroken} 份檔案的角色分類或問答起點判斷失敗過，所以仍會顯示「部分 AI」——這個沒辦法用「補套用 AI」修復（那個階段需要的原始逐字稿內容跑完批次就不會保留），要修復的話請重新上傳這些檔案、完整跑一次分析。`);
+    } else {
+      alert('目前所有不確定句都已經拿到 AI 判斷了，沒有需要補套用的句子');
+    }
+    return;
+  }
 
   processing = true;
   document.getElementById('proc-badge').style.display='flex';
