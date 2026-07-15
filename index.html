@@ -459,7 +459,7 @@ const CAT_META = {
 };
 
 // ── 狀態 ──────────────────────────────────────────────────────────
-let queue = [], results = [], exclusions = [...DEFAULT_EXCLUSIONS], processing = false, currentIdx = -1, detailResult = null, modalFilter = 'ALL';
+let queue = [], results = [], exclusions = [...DEFAULT_EXCLUSIONS], processing = false, currentIdx = -1, detailResult = null, modalFilter = 'ALL', openModalIdx = -1;
 // 當偵測到 Google 回傳「每日額度 (RPD) 已用完」時設為 true：這種額度要等到太平洋時間午夜才會重置，
 // 同一次執行內不管重試幾次、等多久都不可能恢復，跟 RPM/TPM 那種幾秒~一分鐘內會恢復的暫時性限制不同。
 // 一旦確認是這種情況，後續所有 AI 呼叫直接跳過重試、快速 fallback 回字典，避免對 2000+ 份檔案的批次
@@ -1593,7 +1593,7 @@ async function runBatch(){
           hadAnyError = true; // 這一句在最後一輪依然沒拿到結果；details[].aiRefined 保持 false 就夠了，hasAiError() 會自己算出來
         }
       });
-      affected.forEach(fi => recalcAndUpdate(byFile.get(fi)));
+      affected.forEach(fi => { const f = byFile.get(fi); recalcAndUpdate(f); refreshModalIfOpen(f.resultIdx); });
       // 數字一定每個 chunk 都重算（上面 recalcAndUpdate 不受影響），但重畫整張表／整個 grid 這種
       // O(已完成筆數) 的 DOM 重建套用 Pass 1 自己訂的節流間隔，避免大批次（UNC chunk 數上百上千時）
       // 每個 chunk 都整表重繪造成卡頓；沿用同一組 RENDER_MIN_INTERVAL/lastRenderAt，跟 Pass 1 一致
@@ -1697,7 +1697,7 @@ async function reapplyAI(){
           hadAnyError = true; // 同上，details[].aiRefined 保持 false，hasAiError() 會自動反映出來，不需要額外設旗標
         }
       });
-      affected.forEach(ri => recalcAndUpdate(ri));
+      affected.forEach(ri => { recalcAndUpdate(ri); refreshModalIfOpen(ri); });
       renderQueue(); renderResults();
     };
 
@@ -1785,12 +1785,29 @@ const CAT_CLS={POS:'b-pos',NEG:'b-neg',LIT:'b-lit',UNC:'b-unc',NEUTRAL:'b-neu',N
 
 function openModal(idx){
   detailResult=results[idx];
+  openModalIdx=idx;
   modalFilter='ALL';
   document.getElementById('modal-title').innerHTML=`${escapeHtml(detailResult.name)} ${aiBadge(detailResult)}`;
   renderModal();
   document.getElementById('modal').style.display='flex';
 }
-function closeModal(){document.getElementById('modal').style.display='none';}
+function closeModal(){document.getElementById('modal').style.display='none';openModalIdx=-1;}
+
+// 明細視窗只有在「打開當下」畫一次，之後不會自動重畫——如果使用者開著某份檔案的明細視窗，
+// 同時背景的 AI 又更新了這份檔案的資料（runBatch() Pass 6 某個 chunk 完成，或按了「補套用 AI」），
+// 視窗畫面會停留在打開當下的舊快照，實際資料其實已經更新，但畫面看不出來，會被誤以為是
+// 「明明顯示字典猜測、系統卻說沒有需要補套用的句子」這種矛盾/bug。
+// 用索引（不是物件參照）判斷是不是目前開著的這份——runBatch() Pass 6 的 recalcAndUpdate 是用
+// results[f.resultIdx] = {...} 整個換掉新物件，不是原地修改，物件參照比較會抓不到；
+// reapplyAI() 的 recalcAndUpdate 則是原地修改同一個物件，兩種都要能正確判斷，所以統一用索引比對，
+// 重畫前也要重新從 results[] 抓一次 detailResult，才能拿到換過的新物件
+function refreshModalIfOpen(ri){
+  if (document.getElementById('modal').style.display === 'none') return;
+  if (ri !== openModalIdx) return;
+  detailResult = results[ri];
+  document.getElementById('modal-title').innerHTML = `${escapeHtml(detailResult.name)} ${aiBadge(detailResult)}`;
+  renderModal();
+}
 
 function renderModal(){
   const d=detailResult;
