@@ -272,6 +272,8 @@ footer{margin-top:36px;text-align:center;padding:18px;border-top:1px solid var(-
           <div style="display:flex;align-items:center;gap:10px">
             <span class="mono" style="font-size:9px;color:var(--unc)" id="unc-pending-count"></span>
             <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:10px" id="reapply-ai-btn" onclick="reapplyAI()" title="不重新上傳、不重新解析檔案，只針對還沒真正拿到 AI 判斷的不確定句再送一次 AI（例如額度重置後想補完殘留的失敗句子）">補套用 AI（僅未確認句）</button>
+            <span class="mono" style="font-size:9px;color:var(--neg)" id="failed-files-count"></span>
+            <button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:10px" id="reapply-failed-btn" onclick="reapplyFailedFiles()" title="針對角色分類或問答起點判斷失敗的檔案，自動用佇列裡還留著的原始內容重新完整分析一次（不用你手動重新上傳），已經正常的檔案不會被動到">重新分析失敗檔案</button>
             <span class="mono" style="font-size:9px;color:var(--tx2)">COMPLETED: <span id="result-count">0</span></span>
           </div>
         </div>
@@ -1464,7 +1466,7 @@ async function runBatch(){
         catch{text=new TextDecoder('big5').decode(buf);}
       } else text=queue[i].content;
       const local = analyzeRoles(text);
-      if (!local) { const _ei=results.findIndex(x=>x.name===queue[i].name); if(_ei>=0) results[_ei]={name:queue[i].name,...empty()}; else results.push({name:queue[i].name,...empty()}); queue[i].status='done'; continue; } // 空白/無有效句內容，視為合法的全零結果，不算錯誤；同名自動覆蓋
+      if (!local) { const _ei=results.findIndex(x=>x.name===queue[i].name); if(_ei>=0) results[_ei]={name:queue[i].name,qIdx:i,...empty()}; else results.push({name:queue[i].name,qIdx:i,...empty()}); queue[i].status='done'; continue; } // 空白/無有效句內容，視為合法的全零結果，不算錯誤；同名自動覆蓋
       files.push({qIdx:i, fileIdx:k, name:queue[i].name, allSents:local.allSents, isMarker:local.isMarker, roles:local.roles, aiUsed:false, roleAiError:false, qaAiError:false, aiAnySuccess:false});
     } catch(e) { queue[i].status='error'; }
     if (shouldRender) await sleep(0);
@@ -1539,7 +1541,7 @@ async function runBatch(){
   // Pass 6 如果有結果，會在下面直接更新這裡已經顯示的同一筆資料，不會重複新增。
   files.forEach(f => {
     const _ei = results.findIndex(x => x.name === f.name);
-    const entry = {name:f.name, ...f.metrics, aiUsed:f.aiUsed, roleAiError:f.roleAiError, qaAiError:f.qaAiError, aiAnySuccess:f.aiAnySuccess};
+    const entry = {name:f.name, qIdx:f.qIdx, ...f.metrics, aiUsed:f.aiUsed, roleAiError:f.roleAiError, qaAiError:f.qaAiError, aiAnySuccess:f.aiAnySuccess};
     if (_ei >= 0) { f.resultIdx = _ei; results[_ei] = entry; }
     else { f.resultIdx = results.length; results.push(entry); }
     queue[f.qIdx].status='done';
@@ -1566,7 +1568,7 @@ async function runBatch(){
       const m = {pos:nc.P.pos+nc.Q.pos,pos_u:nc.P.pos_u+nc.Q.pos_u,neg:nc.P.neg+nc.Q.neg,neg_u:nc.P.neg_u+nc.Q.neg_u,lit:nc.P.lit+nc.Q.lit,unc:nc.P.unc+nc.Q.unc};
       f.metrics.counts = nc;
       f.metrics.Tone_P = calcTone(nc.P); f.metrics.Tone_Q = calcTone(nc.Q); f.metrics.Tone_T = calcTone(m);
-      results[f.resultIdx] = {name:f.name, ...f.metrics, aiUsed:f.aiUsed, roleAiError:f.roleAiError, qaAiError:f.qaAiError, aiAnySuccess:f.aiAnySuccess};
+      results[f.resultIdx] = {name:f.name, qIdx:f.qIdx, ...f.metrics, aiUsed:f.aiUsed, roleAiError:f.roleAiError, qaAiError:f.qaAiError, aiAnySuccess:f.aiAnySuccess};
     }
 
     let hadAnyError = false;
@@ -1716,6 +1718,37 @@ async function reapplyAI(){
   }
 }
 
+// 角色分類／問答起點判斷失敗的檔案，「補套用 AI」修不了——那兩個階段需要送給 AI 的是
+// 整份逐字稿的每一句內容（哪些是管理層講的、從哪句開始進入問答），不是只有不確定句，
+// 這些原始資料只存在於 runBatch() 執行期間的暫時 files 陣列，批次跑完後 results[] 裡
+// 只留得住最終統計數字，沒地方能重送。過去唯一的辦法是使用者自己重新上傳整份檔案。
+// 但只要使用者沒按過「清除佇列」，queue[] 裡的原始內容（File 物件或貼上的文字）其實還在，
+// 不需要使用者手動操作——把這些檔案在 queue 裡的狀態重設回 pending，直接再呼叫一次
+// runBatch()。runBatch() 本來就只處理 queue 裡還沒 done 的項目，不會動到其他已經正常的
+// 檔案；跑完後也會透過既有的「同名覆蓋」機制（results.findIndex(x=>x.name===f.name)）
+// 自動取代掉舊的失敗結果，不會產生重複的兩筆
+async function reapplyFailedFiles(){
+  if (processing) return;
+  const broken = results.filter(r => r.roleAiError || r.qaAiError);
+  if (!broken.length) { alert('目前沒有角色分類或問答起點判斷失敗的檔案'); return; }
+
+  const available = broken.filter(r => r.qIdx != null && queue[r.qIdx] && queue[r.qIdx].name === r.name);
+  const unavailable = broken.filter(r => !available.includes(r));
+
+  if (!available.length) {
+    alert(`有 ${broken.length} 份檔案卡在角色分類或問答起點判斷失敗，但它們原始的上傳內容已經不在目前的佇列裡（可能是清除過佇列），沒辦法自動重跑，需要手動重新上傳這些檔案：\n${broken.map(r=>r.name).join('、')}`);
+    return;
+  }
+
+  available.forEach(r => { queue[r.qIdx].status = 'pending'; });
+  renderQueue();
+  await runBatch();
+
+  if (unavailable.length) {
+    alert(`已重新分析 ${available.length} 份檔案。另外還有 ${unavailable.length} 份檔案的原始內容已經不在佇列中，需要手動重新上傳：\n${unavailable.map(r=>r.name).join('、')}`);
+  }
+}
+
 // 使用者主動中止：設旗標讓所有重試/sweep 迴圈提早跳出，「不再送出新的請求」這件事跟
 // dailyQuotaExhausted 快速失敗機制一致；但如果剛好有一個請求已經送出、正在等回應，
 // 舊版選擇讓它自然跑完（最長可能等到 90 秒逾時），實測發現使用者會等不到這個時間就
@@ -1743,6 +1776,10 @@ function renderResults(){
   let uncPending = 0;
   results.forEach(r => { (r.uncIndices||[]).forEach(u => { if (!r.details[u.detailIdx].aiRefined) uncPending++; }); });
   document.getElementById('unc-pending-count').textContent = uncPending>0 ? `還有 ${uncPending} 句不確定句未套用 AI` : '';
+  // 同樣道理，統計還有多少檔案卡在角色分類／問答起點判斷失敗（這種「補套用 AI」幫不上忙，
+  // 要靠「重新分析失敗檔案」整份重跑），讓使用者一眼就知道要不要按、按下去大概要重跑幾份
+  const failedCount = results.filter(r => r.roleAiError || r.qaAiError).length;
+  document.getElementById('failed-files-count').textContent = failedCount>0 ? `還有 ${failedCount} 份檔案角色/問答判斷失敗` : '';
   if(!results.length){empty.style.display='block';tbl.style.display='none';return;}
   empty.style.display='none'; tbl.style.display='table';
   body.innerHTML=results.map((r,i)=>{
