@@ -1786,7 +1786,7 @@ function renderResults(){
     const tp=r.counts.P.pos+r.counts.P.pos_u+r.counts.Q.pos+r.counts.Q.pos_u;
     const tn=r.counts.P.neg+r.counts.P.neg_u+r.counts.Q.neg+r.counts.Q.neg_u;
     const tl=r.counts.P.lit+r.counts.Q.lit;
-    const tu=r.counts.P.unc+r.counts.Q.unc;
+    const tu=(r.counts.P.unc-(r.counts.P.pos_u||0)-(r.counts.P.neg_u||0))+(r.counts.Q.unc-(r.counts.Q.pos_u||0)-(r.counts.Q.neg_u||0));
     const tneu=(r.counts.P.neutral||0)+(r.counts.Q.neutral||0);
     const ts=r.counts.P.total+r.counts.Q.total;
     const tc=toneColor(r.Tone_T);
@@ -1895,7 +1895,9 @@ function exportSummary(){
     const uncTotal = (P.unc||0)+(Q.unc||0);
     const uncConfirmed = (r.details||[]).filter(d=>d.aiRefined).length;
     const uncPct = uncTotal>0 ? (uncConfirmed/uncTotal*100).toFixed(1) : '';
-    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${P.pos_u||0},${P.neg_u||0},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total},${Q.pos_u||0},${Q.neg_u||0},${csvEsc(aiStatusText(r))},${uncPct}`;
+    const uncP_remaining = P.unc - (P.pos_u||0) - (P.neg_u||0);
+    const uncQ_remaining = Q.unc - (Q.pos_u||0) - (Q.neg_u||0);
+    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${uncP_remaining},${P.neutral||0},${P.total},${P.pos_u||0},${P.neg_u||0},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${uncQ_remaining},${Q.neutral||0},${Q.total},${Q.pos_u||0},${Q.neg_u||0},${csvEsc(aiStatusText(r))},${uncPct}`;
   });
   dl('\uFEFF'+hdr+rows.join('\n'),'Tone_Summary.csv');
 }
