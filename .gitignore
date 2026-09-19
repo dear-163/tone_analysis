@@ -13,9 +13,10 @@
 .env
 *.log
 
-# Nested git repositories / wrangler
+# Nested git repositories / other projects
 elan-quant/
 .wrangler/
 elan-quant-v2-fixed_2.html
-
-
+spotify-pwa/
+mcu_thesis_engine/
+polymarket_mm/
