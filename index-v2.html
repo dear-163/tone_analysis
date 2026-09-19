@@ -1889,13 +1889,13 @@ function setFilter(f){modalFilter=f;renderModal();}
 function csvEsc(v){ return `"${String(v==null?'':v).replace(/"/g,'""')}"`; }
 function exportSummary(){
   if(!results.length) return;
-  const hdr='Company,Tone_P,Tone_Q,Tone_T,Pos_P,Neg_P,Lit_P,Unc_P,Neutral_P,Total_P,Pos_Q,Neg_Q,Lit_Q,Unc_Q,Neutral_Q,Total_Q,AI_Status,UNC_AI_Confirmed_Pct\n';
+  const hdr='Company,Tone_P,Tone_Q,Tone_T,Pos_P,Neg_P,Lit_P,Unc_P,Neutral_P,Total_P,PosAI_P,NegAI_P,Pos_Q,Neg_Q,Lit_Q,Unc_Q,Neutral_Q,Total_Q,PosAI_Q,NegAI_Q,AI_Status,UNC_AI_Confirmed_Pct\n';
   const rows=results.map(r=>{
     const{P,Q}=r.counts;
     const uncTotal = (P.unc||0)+(Q.unc||0);
     const uncConfirmed = (r.details||[]).filter(d=>d.aiRefined).length;
     const uncPct = uncTotal>0 ? (uncConfirmed/uncTotal*100).toFixed(1) : '';
-    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total},${csvEsc(aiStatusText(r))},${uncPct}`;
+    return `${csvEsc(r.name)},${r.Tone_P.toFixed(4)},${r.Tone_Q.toFixed(4)},${r.Tone_T.toFixed(4)},${P.pos+P.pos_u},${P.neg+P.neg_u},${P.lit},${P.unc},${P.neutral||0},${P.total},${P.pos_u||0},${P.neg_u||0},${Q.pos+Q.pos_u},${Q.neg+Q.neg_u},${Q.lit},${Q.unc},${Q.neutral||0},${Q.total},${Q.pos_u||0},${Q.neg_u||0},${csvEsc(aiStatusText(r))},${uncPct}`;
   });
   dl('\uFEFF'+hdr+rows.join('\n'),'Tone_Summary.csv');
 }
